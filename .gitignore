@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Data files
+data/
+
+data/chronicle.db
+data/summarize.log
+graphify-out/
+.claude/
+
+# Local assistant context. Machine-specific, deliberately not published.
+CLAUDE.md
+
+# Local scratch / tooling, not part of the package.
+_search_tmp.py
+.graphifyignore

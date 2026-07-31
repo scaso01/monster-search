@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # A plain install, not an editable one, so a missing runtime dependency
+      # shows up here rather than in someone's fresh clone.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      # Integration tests need live self-hosted containers, so they stay out.
+      - name: Test
+        run: pytest tests/ -q -m "not integration"
+
+      - name: Lint
+        run: pyflakes src/monster_search/

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monster-search"
+version = "0.10.0"
+description = "Unified search hub — web, academic, code, security, packages, WHOIS, news, and more"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "feedparser>=6.0.0",
+    "yt-dlp>=2024.0.0",
+    "youtube-transcript-api>=0.6.0",
+    # _dedup imports this at module scope and all_engines imports _dedup, so a
+    # missing datasketch is an ImportError on the main search path, not an
+    # optional-feature degradation.
+    "datasketch>=1.6.0",
+]
+
+[project.optional-dependencies]
+perplexity = ["curl_cffi>=0.7.0"]
+all-engines = ["curl_cffi>=0.7.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "respx>=0.22.0",
+    "pyflakes>=3.2.0",
+    # The Perplexity engine is optional, but two health tests assert the probe
+    # reports UP once auth is configured, and it only does that when curl_cffi
+    # imports. Without this the suite passes locally and fails anywhere clean.
+    "curl_cffi>=0.7.0",
+]
+
+[project.scripts]
+monster-search = "monster_search.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+asyncio_mode = "auto"
+markers = [
+    "integration: requires live Monster containers (deselect with '-m not integration')",
+]
