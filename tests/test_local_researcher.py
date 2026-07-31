@@ -5,7 +5,6 @@ import pytest
 import respx
 
 from monster_search.clients.local_researcher import LocalResearcherClient, _extract_sources
-from monster_search.config import Config
 from monster_search.models import SearchResult
 
 BASE = "http://localhost:8300"

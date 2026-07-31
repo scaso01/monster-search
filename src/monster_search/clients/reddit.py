@@ -4,6 +4,11 @@ Uses the Atom/RSS feed endpoint (``/search.rss``) because Reddit now
 returns HTTP 403 on the public JSON API for automated requests.  The RSS
 feed is still publicly accessible and returns post titles, URLs,
 subreddit labels, dates, and HTML content snippets.
+
+The feed must be fetched from ``www.reddit.com``.  ``old.reddit.com`` used to
+serve it and now answers ``/search.rss`` with HTTP 200 and an HTML page, and
+the bare ``reddit.com`` apex answers 429, so both of those look like success
+to a naive client and then fail at the parser.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ import httpx
 from monster_search.config import Config
 from monster_search.models import SearchResult
 
-_BASE_URL = "https://old.reddit.com"
+_BASE_URL = "https://www.reddit.com"
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -44,7 +49,22 @@ class RedditClient:
 
     @staticmethod
     def _parse_feed(xml_text: str, max_results: int) -> list[SearchResult]:
-        root = ET.fromstring(xml_text)
+        # Reddit answers with HTTP 200 and an HTML page when it decides to
+        # block the request, so nothing fails until here. Most such pages are
+        # not well-formed and raise below, but a simple one parses cleanly and
+        # would otherwise be reported as "no results found", which is worse
+        # than an error because it looks like a real answer.
+        preview = xml_text.lstrip()[:80].replace("\n", " ")
+        _not_a_feed = RuntimeError(
+            "reddit did not return an Atom feed, which usually means the "
+            f"request was blocked. Response began: {preview!r}"
+        )
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            raise _not_a_feed from exc
+        if root.tag != "{http://www.w3.org/2005/Atom}feed":
+            raise _not_a_feed
         entries = root.findall("atom:entry", _ATOM_NS)
         results: list[SearchResult] = []
         for entry in entries[:max_results]:
@@ -56,8 +76,11 @@ class RedditClient:
 
             raw_title = title_el.text if title_el is not None and title_el.text else ""
             url = link_el.get("href", "") if link_el is not None else ""
-            # Normalise old.reddit.com URLs to reddit.com
+            # Normalise to a bare reddit.com link. Entries come back as
+            # www.reddit.com now, and older cached feeds still carry
+            # old.reddit.com, so both are folded down.
             url = url.replace("https://old.reddit.com", "https://reddit.com")
+            url = url.replace("https://www.reddit.com", "https://reddit.com")
 
             subreddit = ""
             if category_el is not None:

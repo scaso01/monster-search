@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 import httpx
@@ -131,8 +130,8 @@ def _mock_all_services(respx_mock: respx.MockRouter | None = None) -> None:
         return_value=httpx.Response(200, json={"results": [{"url": "https://tokio.rs"}]})
     )
 
-    # Archive.org: probe now routes via Monster SSH (no direct HTTP call from Beast).
-    # The SSH subprocess mock is handled separately in each test via mock_sp.
+    # Archive.org: the probe can route over SSH instead of calling out
+    # directly, so its subprocess is mocked separately in each test via mock_sp.
 
     # grep.app: /api/search endpoint, ≥1 hit in hits.hits
     respx.get("https://grep.app/api/search").mock(

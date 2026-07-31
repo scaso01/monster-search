@@ -4,11 +4,7 @@ import httpx
 import pytest
 import respx
 
-from monster_search.clients.semantic_scholar import (
-    SemanticScholarClient,
-    _NO_KEY_MSG,
-    _RATE_LIMITED_WITH_KEY_MSG,
-)
+from monster_search.clients.semantic_scholar import SemanticScholarClient
 from monster_search.config import Config
 from monster_search.models import SearchResult
 

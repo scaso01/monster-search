@@ -63,7 +63,14 @@ ENGINE_CATEGORIES = {
     "ai_ml": ["huggingface"],
     "whois": ["whodat"],
     "video": ["youtube"],
-    "shopping": ["slickdeals", "cheapshark", "deals_rss", "priceghost", "amazon_deals", "newegg"],
+    # searxng_shopping belongs here: _run_one has always had a branch for it and
+    # the router's own SHOPPING category leads with it, but it was missing from
+    # this list, so `--engine shopping` silently skipped the SearXNG shopping
+    # category and that dispatch branch was unreachable.
+    "shopping": [
+        "searxng_shopping", "slickdeals", "cheapshark", "deals_rss",
+        "priceghost", "amazon_deals", "newegg",
+    ],
     "deals": ["slickdeals", "deals_rss", "amazon_deals"],
 }
 
@@ -294,7 +301,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="monster-search",
-        description="Unified search hub — web, academic, code, security, packages, WHOIS, news, AI (20 engines, smart tiered by default)",
+        description="Unified search hub — web, academic, code, security, packages, WHOIS, news, video, AI, community, archive and shopping, smart tiered by default",
     )
     parser.add_argument("query", nargs="*", help="Search query (or URL for crawl engine)")
     parser.add_argument(
@@ -416,8 +423,8 @@ def main(argv: list[str] | None = None) -> None:
             if not config.semantic_scholar_api_key:
                 print(
                     "error: semantic_scholar engine disabled — "
-                    "set MONSTER_SEMANTIC_SCHOLAR_API_KEY in "
-                    "~/Projects/monster-search/.env to enable",
+                    "set MONSTER_SEMANTIC_SCHOLAR_API_KEY in your environment "
+                    "or in a .env file to enable",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -476,9 +483,10 @@ def main(argv: list[str] | None = None) -> None:
             if not config.grepapp_enabled:
                 print(
                     "error: grepapp engine disabled — "
-                    "set MONSTER_GREPAPP_ENABLED=true in "
-                    "~/Projects/monster-search/.env to enable, "
-                    "but note that grep.app is ASN-blocked from NordVPN exits",
+                    "set MONSTER_GREPAPP_ENABLED=true in your environment "
+                    "or in a .env file to enable. It is off by default because "
+                    "grep.app rate-limits whole hosting and VPN address ranges, "
+                    "so it fails instantly from many networks",
                     file=sys.stderr,
                 )
                 sys.exit(1)

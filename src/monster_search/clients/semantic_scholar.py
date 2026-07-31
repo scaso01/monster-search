@@ -20,8 +20,8 @@ _USER_AGENT = "monster-search/0.10.0 (research tool)"
 _NO_KEY_MSG = (
     "Semantic Scholar requires a free API key.  "
     "Get one at https://www.semanticscholar.org/product/api#api-key "
-    "then set MONSTER_SEMANTIC_SCHOLAR_API_KEY in "
-    "~/Projects/monster-search/.env"
+    "then set MONSTER_SEMANTIC_SCHOLAR_API_KEY in your environment "
+    "or in a .env file"
 )
 
 # Message shown when a 429 is received even with a key set.

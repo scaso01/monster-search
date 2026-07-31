@@ -42,7 +42,7 @@ REDDIT_RSS_EMPTY = """\
 @respx.mock
 def test_reddit_search():
     """Basic search returns SearchResults with subreddit in title."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_RESPONSE)
     )
     client = RedditClient()
@@ -61,7 +61,7 @@ def test_reddit_search():
 @respx.mock
 def test_reddit_empty():
     """Empty feed returns empty list."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_EMPTY)
     )
     client = RedditClient()
@@ -72,7 +72,7 @@ def test_reddit_empty():
 @respx.mock
 def test_reddit_error():
     """HTTP 500 raises HTTPStatusError."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(500)
     )
     client = RedditClient()
@@ -83,7 +83,7 @@ def test_reddit_error():
 @respx.mock
 def test_reddit_timeout():
     """ReadTimeout raises TimeoutException."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         side_effect=httpx.ReadTimeout("timed out")
     )
     client = RedditClient()
@@ -94,7 +94,7 @@ def test_reddit_timeout():
 @respx.mock
 def test_reddit_sends_correct_params():
     """Verify q, limit, sort=relevance, type=link sent to RSS endpoint."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_EMPTY)
     )
     client = RedditClient()
@@ -111,7 +111,7 @@ def test_reddit_sends_correct_params():
 @respx.mock
 def test_reddit_empty_content_snippet():
     """When content is empty, snippet is empty string."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_RESPONSE)
     )
     client = RedditClient()
@@ -124,7 +124,7 @@ def test_reddit_empty_content_snippet():
 @respx.mock
 def test_reddit_published_format():
     """Atom updated timestamp formatted as 'YYYY-MM-DD HH:MM UTC'."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_RESPONSE)
     )
     client = RedditClient()
@@ -138,7 +138,7 @@ def test_reddit_published_format():
 @pytest.mark.asyncio
 async def test_reddit_async_search():
     """Async search works."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_RESPONSE)
     )
     client = RedditClient()
@@ -150,9 +150,52 @@ async def test_reddit_async_search():
 
 
 @respx.mock
+def test_reddit_fetches_from_www_not_old():
+    """Regression: old.reddit.com answers /search.rss with HTML, not Atom.
+
+    It returns HTTP 200 while doing so, so nothing fails until the parser,
+    and every mocked test still passed while the live engine was broken.
+    """
+    route = respx.get("https://www.reddit.com/search.rss").mock(
+        return_value=httpx.Response(200, text=REDDIT_RSS_EMPTY)
+    )
+    RedditClient().search("test")
+
+    assert route.called
+    assert "old.reddit.com" not in str(respx.calls[0].request.url)
+
+
+@respx.mock
+def test_reddit_wellformed_html_is_not_mistaken_for_an_empty_feed():
+    """A blocked request arrives as an HTML page with a 200 status.
+
+    This sample happens to be well-formed XML, so it parses without error and
+    would be reported as "no results" unless the root element is checked. A
+    wrong answer that looks right is worse than a failure.
+    """
+    respx.get("https://www.reddit.com/search.rss").mock(
+        return_value=httpx.Response(200, text="<!DOCTYPE html><html><body>no</body></html>")
+    )
+    with pytest.raises(RuntimeError, match="did not return an Atom feed"):
+        RedditClient().search("test")
+
+
+@respx.mock
+def test_reddit_malformed_html_gives_a_readable_error():
+    """The real interstitial is not well-formed, so it fails in the parser."""
+    respx.get("https://www.reddit.com/search.rss").mock(
+        return_value=httpx.Response(
+            200, text='<!DOCTYPE html><html lang="en" device=desktop><head prefix="og: x"></html>'
+        )
+    )
+    with pytest.raises(RuntimeError, match="did not return an Atom feed"):
+        RedditClient().search("test")
+
+
+@respx.mock
 def test_reddit_url_normalized():
     """old.reddit.com URLs are normalized to reddit.com."""
-    respx.get("https://old.reddit.com/search.rss").mock(
+    respx.get("https://www.reddit.com/search.rss").mock(
         return_value=httpx.Response(200, text=REDDIT_RSS_RESPONSE)
     )
     client = RedditClient()

@@ -6,7 +6,6 @@ import pytest
 
 from monster_search.clients.perplexity_client import PerplexityClient
 from monster_search.config import Config
-from monster_search.models import SearchResult
 
 
 def test_perplexity_missing_token():
@@ -112,19 +111,8 @@ def test_perplexity_search():
     mock_session.__enter__ = MagicMock(return_value=mock_session)
     mock_session.__exit__ = MagicMock(return_value=False)
 
-    with patch("monster_search.clients.perplexity_client.PerplexityClient.search") as mock_search:
-        # Actually test the real flow by mocking curl_cffi.requests.Session
-        pass
-
-    # Direct approach: mock at the curl_cffi level
-    mock_session_cls = MagicMock(return_value=mock_session)
-
-    with patch.dict("sys.modules", {"curl_cffi": MagicMock(), "curl_cffi.requests": MagicMock(Session=mock_session_cls)}):
-        # Re-import to pick up the mock — instead, patch at call site
-        pass
-
-    # Simplest: test _parse_sse directly (already covered above) and test the full flow
-    # by patching the Session class after import
+    # curl_cffi is imported inside search(), so patching sys.modules here is
+    # enough to hand it our fake Session without touching the import site.
     import sys
     mock_curl_cffi = MagicMock()
     mock_requests_module = MagicMock()

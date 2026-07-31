@@ -6,7 +6,6 @@ import pytest
 import respx
 
 from monster_search.clients.perplexica import PerplexicaClient
-from monster_search.config import Config
 from monster_search.models import SearchResult
 
 MOCK_PROVIDERS = {

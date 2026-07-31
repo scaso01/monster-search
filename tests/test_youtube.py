@@ -192,6 +192,11 @@ def test_youtube_max_results_honored(mock_ytdlp, mock_transcript_api_cls):
     client = YouTubeClient()
     results = client.search("test", max_results=1)
 
+    # The count is the thing this test is named for. Asserting only the query
+    # string left the returned list unchecked, so a client that ignored
+    # max_results entirely would still have passed.
+    assert len(results) == 1
+
     call_args = mock_ydl.extract_info.call_args
     assert "ytsearch1:" in call_args[0][0]
 

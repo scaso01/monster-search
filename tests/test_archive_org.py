@@ -389,12 +389,12 @@ def test_is_url_detection():
 
 @pytest.mark.integration
 def test_archive_org_live_text_search():
-    """Live smoke test: text query via Monster SSH."""
+    """Live smoke test: text query, direct or via the configured SSH host."""
     client = ArchiveOrgClient()
     try:
         results = client.search("python programming", max_results=3)
     except RuntimeError as exc:
-        pytest.skip(f"Archive.org via Monster unavailable: {exc}")
+        pytest.skip(f"Archive.org unavailable: {exc}")
     assert len(results) > 0
     assert all(r.source == "archive_org" for r in results)
     assert all(r.url for r in results)
@@ -402,12 +402,12 @@ def test_archive_org_live_text_search():
 
 @pytest.mark.integration
 def test_archive_org_live_url_search():
-    """Live smoke test: URL query falls back to catalog search via Monster SSH."""
+    """Live smoke test: a URL query falls back to catalog search."""
     client = ArchiveOrgClient()
     try:
         results = client.search("https://python.org/", max_results=3)
     except RuntimeError as exc:
-        pytest.skip(f"Archive.org via Monster unavailable: {exc}")
+        pytest.skip(f"Archive.org unavailable: {exc}")
     assert len(results) > 0
     assert all(r.source == "archive_org" for r in results)
     assert all(r.url for r in results)

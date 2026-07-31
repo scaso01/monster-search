@@ -48,13 +48,6 @@ from monster_search.config import Config
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_REDDIT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-
-
 def _client(timeout: float = 10, **kwargs) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=True, **kwargs)
 
@@ -601,36 +594,33 @@ def _probe_huggingface(_config: Config) -> tuple[bool, str]:
         return False, f"connection error: {exc}"
 
 
-def _probe_reddit(_config: Config) -> tuple[bool, str]:
-    """Query old.reddit.com RSS for 'rust programming' and require ≥1 entry.
+def _probe_reddit(config: Config) -> tuple[bool, str]:
+    """Run a real one-result Reddit search and require at least one entry.
 
-    Reddit blocks the public JSON API (403) for automated clients.
-    The RSS/Atom feed on old.reddit.com still works when a browser-like
-    User-Agent is supplied.  The old probe hit the JSON API without a
-    proper UA and got a false negative.
+    This goes through RedditClient rather than re-issuing the request here.
+    The probe used to carry its own copy of the endpoint, so when Reddit
+    retired the feed on old.reddit.com the two drifted apart and the probe
+    kept reporting an engine that had already stopped working.
     """
+    from monster_search.clients.reddit import RedditClient
+
     try:
-        with httpx.Client(
-            timeout=12,
-            headers={"User-Agent": _REDDIT_UA},
-            follow_redirects=True,
-        ) as c:
-            resp = c.get(
-                "https://old.reddit.com/search.rss",
-                params={"q": "rust programming", "limit": "1", "sort": "relevance", "type": "link"},
-            )
-        if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code}"
-        root = ET.fromstring(resp.text)
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-        entries = root.findall("atom:entry", ns)
-        if not entries:
-            return False, "0 entries in Reddit RSS for 'rust programming'"
-        return True, ""
+        results = RedditClient(config=config).search("rust programming", max_results=1)
+    except httpx.HTTPStatusError as exc:
+        # Reddit rate-limits the feed per source address after a handful of
+        # requests, so repeated health checks provoke this on their own. It is
+        # a distinct condition from the engine being unreachable and wants a
+        # different response, namely waiting rather than debugging.
+        if exc.response.status_code == 429:
+            return False, "rate limited by reddit (429), try again in a few minutes"
+        return False, f"HTTP {exc.response.status_code}"
     except httpx.HTTPError as exc:
         return False, f"connection error: {exc}"
-    except ET.ParseError as exc:
-        return False, f"XML parse error: {exc}"
+    except RuntimeError as exc:
+        return False, str(exc)
+    if not results:
+        return False, "0 entries in Reddit RSS for 'rust programming'"
+    return True, ""
 
 
 def _probe_fyin(config: Config) -> tuple[bool, str]:
