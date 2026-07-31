@@ -388,11 +388,23 @@ def test_khoj_ai_search(config):
 
 @pytest.mark.slow
 def test_synthesizer(config):
-    """Needs SearXNG for sources and an OpenAI-compatible LLM to write them up."""
+    """Needs SearXNG for sources and an OpenAI-compatible LLM to write them up.
+
+    The synthesizer returns an empty answer by design when SearXNG gives it
+    nothing to work from, so that a smart search falls back to the other
+    engines rather than failing. A SearXNG instance whose upstream providers
+    are all in cooldown therefore produces a legitimate empty result, not a
+    failure, and this skips rather than asserting on it.
+    """
+    from monster_search.clients.searxng import SearXNGClient
     from monster_search.clients.synthesizer import SynthesizerClient
 
     _require(config.searxng_url, "searxng")
     _require(config.llama_url, "llama-server")
+
+    if not SearXNGClient(config=config).search("what is rust async", max_results=3):
+        pytest.skip("SearXNG returned no sources, nothing for the synthesizer to write")
+
     message, results = SynthesizerClient(config=config).search("what is rust async")
     assert message
     assert isinstance(results, list)
