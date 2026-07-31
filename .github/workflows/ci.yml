@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -32,5 +32,8 @@ jobs:
       - name: Test
         run: pytest tests/ -q -m "not integration"
 
+      # tests/ is linted too. Dead imports and assigned-but-unused names in a
+      # test are worth catching: the second kind is often a result that was
+      # computed and then never asserted on.
       - name: Lint
-        run: pyflakes src/monster_search/
+        run: pyflakes src/monster_search/ tests/

@@ -1,8 +1,22 @@
 # monster-search
 
-Unified search hub -- 34 engines across 12 categories, smart tiered by default. Web, academic, code, security, packages, WHOIS, news, video, AI/ML, community, archive, and shopping search behind a single CLI and Python API.
+[![CI](https://github.com/scaso01/monster-search/actions/workflows/ci.yml/badge.svg)](https://github.com/scaso01/monster-search/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**v0.10.0** | Python 3.12+ | 681 tests | Zero cost (all self-hosted or free APIs)
+Ask one question, get answers from 34 search engines at once. Web, academic,
+code, security, packages, WHOIS, news, video, AI, community, archive and
+shopping, behind a single CLI and Python API.
+
+It reads the query first and only runs the engines that suit it, so a CVE
+identifier goes to the vulnerability databases and a paper title goes to the
+academic ones. Results from every engine are merged into one ranked list
+rather than shown as separate piles.
+
+Everything it talks to is either a free public API or something you host
+yourself. There is no paid tier and no account to sign up for.
+
+![A smart tiered search, with an AI-written answer and its sources](docs/images/smart-search.png)
 
 ## Quick Start
 
@@ -33,23 +47,23 @@ monster-search --health
 
 | Engine | Category | Tier | Source | Time |
 |--------|----------|------|--------|------|
-| SearXNG | Web General | 1 | Docker (Monster :8080) | ~3-4s |
+| SearXNG | Web General | 1 | Self-hosted (Docker, :8080) | ~3-4s |
 | Marginalia | Web General | 1 | External API | ~3s |
 | mwmbl | Web General | 1 | External API | ~3s |
 | Perplexity | Web AI | 1 | External (cookie auth) | ~30s |
 | Synthesizer | Web AI | 1 | SearXNG + Crawl4AI + llama-server | ~30-60s |
-| Vane | Web AI | 2 | Docker (Monster :3004) | ~2 min |
-| Khoj | Web AI | 2 | Docker (Monster :42110) | ~2 min |
-| Fyin | Web AI | 2 | CLI via SSH to Monster | ~2 min |
-| Local Deep Researcher | Web AI | 3 | Docker (Monster :8300) | ~3-8 min |
+| Vane | Web AI | 2 | Self-hosted (Docker, :3004) | ~2 min |
+| Khoj | Web AI | 2 | Self-hosted (Docker, :42110) | ~2 min |
+| Fyin | Web AI | 2 | CLI on a host you reach over SSH | ~2 min |
+| Local Deep Researcher | Web AI | 3 | Self-hosted (Docker, :8300) | ~3-8 min |
 | arXiv | Academic | 1 | External API | ~3s |
 | Semantic Scholar | Academic | 1 | External API | ~3s |
 | OpenAlex | Academic | 1 | External API | ~3s |
-| Zoekt | Code | 1 | Local index | ~1s |
+| Zoekt | Code | 1 | Self-hosted index | ~1s |
 | OSV | Security | 1 | External API (osv.dev) | ~2s |
 | deps.dev | Packages | 1 | External API | ~2s |
-| Who-Dat | Domain/WHOIS | 1 | External API | ~1s |
-| News (SearXNG) | News | 1 | Docker (Monster :8080) | ~5s |
+| Who-Dat | Domain/WHOIS | 1 | Self-hosted (Docker, :8083) | ~1s |
+| News (SearXNG) | News | 1 | Self-hosted (Docker, :8080) | ~5s |
 | GNews | News | 1 | External RSS | ~2s |
 | Archive.org | Archive | 1 | External API (CDX + catalog) | ~10s |
 | YouTube | Video | 1 | yt-dlp + youtube-transcript-api | ~5-10s |
@@ -59,11 +73,11 @@ monster-search --health
 | searchcode_repo | Code | opt-in | searchcode.com API (requires --repo) | ~2s |
 | Hacker News | Community | 1 | Algolia API | ~2s |
 | HuggingFace | AI/ML | 1 | HuggingFace Hub API | ~3s |
-| Reddit | Community | 1 | Reddit API | ~3s |
+| Reddit | Community | 1 | Reddit Atom feed | ~3s |
 | CheapShark | Shopping | 1 | CheapShark API | ~2s |
 | SlickDeals | Shopping | 1 | SlickDeals API | ~3s |
-| Crawl4AI | Utility | -- | Docker (Monster :11235) | ~15s |
-| changedetection.io | Utility | -- | Docker (Monster :8086) | -- |
+| Crawl4AI | Utility | -- | Self-hosted (Docker, :11235) | ~15s |
+| changedetection.io | Utility | -- | Self-hosted (Docker, :8086) | -- |
 
 **Notes:**
 - Tier 1 engines run on every query by default (always-on + router-gated specialists).
@@ -166,16 +180,27 @@ monster-search --engine deps "npm:express"
 monster-search --engine whodat "example.com"
 monster-search --engine zoekt "func main"
 
-# Category aliases (run grouped engines in parallel)
+# Category aliases (run the grouped engines in parallel and fuse the results)
 monster-search --engine academic "transformer"     # arxiv + semantic_scholar + openalex
+monster-search --engine code "func main"           # zoekt + grepapp + github_code
 monster-search --engine security "pypi:jinja2"     # osv
 monster-search --engine packages "npm:express"     # deps
-monster-search --engine code "func main"           # zoekt
 monster-search --engine whois "example.com"        # whodat
+monster-search --engine video "rust tutorial"      # youtube
+monster-search --engine ai_ml "text generation"    # huggingface
+monster-search --engine shopping "laptop"          # searxng shopping + slickdeals + cheapshark
+                                                   #   + deals_rss + priceghost + amazon + newegg
+monster-search --engine deals "ssd"                # slickdeals + deals_rss + amazon
 
 # Full sweep
 monster-search --engine all "query"                # all 34 engines (~2-5 min)
 ```
+
+An alias runs its engines concurrently and merges what comes back, so a single
+academic query returns arXiv and OpenAlex results interleaved by rank rather
+than grouped by source:
+
+![An academic category search returning fused arXiv and OpenAlex results](docs/images/category-alias.png)
 
 ### URL Change Monitoring
 
@@ -244,16 +269,27 @@ class SearchResult:
 
 ## Prerequisites
 
-Docker containers on Monster (or any host):
+**Nothing, to start with.** Python 3.12 and `pip install` are enough. Every
+engine in the "external APIs" table below is free and keyless, so a fresh clone
+searches roughly twenty engines out of the box. Anything you have not set up
+reports itself as unavailable and is skipped, rather than failing the search.
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| [SearXNG](https://github.com/searxng/searxng) | :8080 | Privacy-respecting metasearch |
-| [Vane](https://github.com/ItzCraworzyy/Perplexica) | :3004 | AI search (Perplexica fork, 4 JS patches) |
-| [Local Deep Researcher](https://langchain-ai.github.io/langgraph/) | :8300 | LangGraph iterative research |
-| [Crawl4AI](https://github.com/unclecode/crawl4ai) | :11235 | JS-rendered page extraction |
-| [changedetection.io](https://github.com/dgtlmoon/changedetection.io) | :8086 | URL change monitoring |
-| [Khoj](https://github.com/khoj-ai/khoj) | :42110 | AI chat/search (anonymous mode) |
+The rest are services you host yourself. Each one adds engines; none is
+required. Point the matching `MONSTER_*_URL` at wherever you run it, and leave
+it unset to keep that engine switched off.
+
+| Service | Default port | Adds |
+|---------|--------------|------|
+| [SearXNG](https://github.com/searxng/searxng) | :8080 | General web and news search, plus the sources the synthesizer writes from |
+| [Vane](https://github.com/ItzCraworzyy/Perplexica) | :3004 | AI search (a Perplexica fork) |
+| [Khoj](https://github.com/khoj-ai/khoj) | :42110 | AI chat and search, anonymous mode |
+| [Local Deep Researcher](https://langchain-ai.github.io/langgraph/) | :8300 | Iterative multi-step research |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | :11235 | Extraction of JavaScript-rendered pages |
+| [changedetection.io](https://github.com/dgtlmoon/changedetection.io) | :8086 | The `watch` subcommands |
+| [Who-Dat](https://github.com/MoeClub/whodat) | :8083 | WHOIS lookups |
+| [Zoekt](https://github.com/sourcegraph/zoekt) | :6070 | Regex code search across your own repositories |
+| [Meilisearch](https://github.com/meilisearch/meilisearch) | :7700 | A cache, so repeat queries return instantly |
+| Any OpenAI-compatible LLM | :8080 | The synthesizer's written answer. [llama-server](https://github.com/ggml-org/llama.cpp), Ollama and vLLM all work |
 
 External APIs (no containers):
 
@@ -270,9 +306,16 @@ External APIs (no containers):
 | [GNews](https://news.google.com/) | None | Google News RSS |
 | [Archive.org](https://archive.org/) | None | CDX + Advanced Search |
 
-Local services on Beast:
-- **llama-server** (:8080) -- OpenAI-compatible LLM for Synthesizer engine
-- **Fyin** -- CLI binary, invoked via SSH to Monster
+One engine, **fyin**, is a CLI binary rather than a service, so it runs over
+SSH on a host where you have installed it. It stays off until you set
+`MONSTER_SSH_HOST`. See [Engines that run over SSH](#engines-that-run-over-ssh).
+
+`--health` shows you where you stand. It issues a real query against every
+engine rather than pinging a port, so an engine that answers but returns
+nothing usable is reported as down. Below, everything is configured except
+fyin, which has no SSH host set.
+
+![Health output listing each engine as up or down with its latency](docs/images/health.png)
 
 ## Architecture
 
@@ -303,7 +346,7 @@ src/monster_search/
     ├── archive_org.py            # Archive.org CDX + Advanced Search
     ├── vane.py                   # Vane AI search (dynamic provider IDs)
     ├── khoj.py                   # Khoj AI chat/search (anonymous)
-    ├── fyin.py                   # Fyin search via SSH to Monster
+    ├── fyin.py                   # Fyin search over SSH
     ├── arxiv.py                  # arXiv preprint search
     ├── semantic_scholar.py       # Semantic Scholar papers
     ├── openalex.py               # OpenAlex works
@@ -338,9 +381,15 @@ Key variables:
 | `MONSTER_VANE_TIMEOUT` | `300` | Vane timeout |
 | `MONSTER_KHOJ_URL` | `http://localhost:42110` | Khoj AI search URL |
 | `MONSTER_KHOJ_TIMEOUT` | `300` | Khoj timeout |
+| `MONSTER_ZOEKT_URL` | `http://localhost:6070` | Zoekt code search URL |
+| `MONSTER_WHODAT_URL` | `http://localhost:8083` | Who-Dat WHOIS URL |
+| `MONSTER_MEILISEARCH_URL` | `http://localhost:7700` | Meilisearch result cache URL |
+| `MONSTER_MEILISEARCH_KEY` | -- | Meilisearch API key |
+| `MONSTER_LLAMA_URL` | `http://localhost:8080` | OpenAI-compatible endpoint for the synthesizer |
+| `MONSTER_SYNTHESIZER_TIMEOUT` | `120` | Synthesizer timeout |
 | `MONSTER_SSH_HOST` | -- | Remote host for the SSH-routed engines (see below) |
 | `MONSTER_FYIN_ENV_FILE` | -- | Optional env file sourced on that host before fyin |
-| `MONSTER_FYIN_TIMEOUT` | `180` | Fyin SSH timeout |
+| `MONSTER_FYIN_TIMEOUT` | `300` | Fyin SSH timeout |
 | `MONSTER_LOCAL_RESEARCHER_URL` | `http://localhost:8300` | Local Deep Researcher URL |
 | `MONSTER_LOCAL_RESEARCHER_TIMEOUT` | `600` | Local Researcher timeout |
 | `MONSTER_CRAWL4AI_URL` | `http://localhost:11235` | Crawl4AI URL |
@@ -348,6 +397,11 @@ Key variables:
 | `MONSTER_ARCHIVE_ORG_TIMEOUT` | `60` | Archive.org timeout |
 | `MONSTER_CHANGEDETECTION_URL` | `http://localhost:8086` | changedetection.io URL |
 | `MONSTER_CHANGEDETECTION_API_KEY` | -- | changedetection.io API key |
+| `MONSTER_SEMANTIC_SCHOLAR_API_KEY` | -- | Free key; without one the engine is skipped |
+| `MONSTER_GREPAPP_ENABLED` | `false` | grep.app is off by default (it 429s many networks) |
+
+`.env.example` lists every variable with its real default. The two are checked
+against each other, so if a default here disagrees with the code, that is a bug.
 
 ### Engines that run over SSH
 
@@ -366,17 +420,28 @@ Nothing else in the tool opens an SSH connection.
 ## Testing
 
 ```bash
-# Unit tests (mocked HTTP, no containers needed)
-pytest tests/ -v -m "not integration"
+# Unit tests: every HTTP call mocked, no services needed. This is what CI runs.
+pytest tests/ -m "not integration"
 
-# Integration tests (requires running containers)
-pytest tests/test_integration.py -v -m integration
+# Integration tests: real requests against real services.
+pytest tests/test_integration.py -m integration
+
+# ...without the AI engines, which take about two minutes each.
+pytest tests/test_integration.py -m "integration and not slow"
 
 # Lint
-pyflakes src/monster_search/
+pyflakes src/monster_search/ tests/
 ```
 
-Unit tests use `respx` for HTTP mocking and `unittest.mock` -- no network calls.
+The unit suite mocks HTTP through `respx` and makes no network calls, so it is
+deterministic and safe to run anywhere.
+
+The integration suite is the one that catches engines which have quietly
+stopped working. Search providers change endpoints without warning, and a
+mocked test keeps passing when that happens because the mock still returns the
+old shape. Every test there skips itself when the service it needs is
+unreachable or unconfigured, so a partial setup produces skips rather than
+failures.
 
 ## License
 

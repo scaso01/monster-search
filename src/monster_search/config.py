@@ -218,9 +218,9 @@ class Config:
     )
 
     # grep.app code search
-    # grepapp_enabled defaults False — grep.app is permanently ASN-blocked from
-    # NordVPN exits (HTTP 429 in <200ms even after exit refresh).  Set
-    # MONSTER_GREPAPP_ENABLED=true in .env to re-enable if running without VPN.
+    # grepapp_enabled defaults False: grep.app rate-limits whole hosting and
+    # VPN address ranges, returning HTTP 429 in under a second, so it fails
+    # instantly from many networks. Set MONSTER_GREPAPP_ENABLED=true to try it.
     grepapp_enabled: bool = field(
         default_factory=lambda: os.environ.get("MONSTER_GREPAPP_ENABLED", "").lower()
         in ("1", "true", "yes")

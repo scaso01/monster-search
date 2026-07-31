@@ -34,11 +34,11 @@ class PerplexityClient:
     def _token_from_browser(self) -> str | None:
         """Read the live Perplexity session cookie from a local browser profile.
 
-        Mirrors yt-intel's self-healing cookie approach: as long as the user is
-        logged into perplexity.ai in the configured browser, the token is always
-        current — no static secret stored in .env. Reuses yt-dlp's cookie
-        extractor (already a dependency). Returns None when not configured, the
-        browser/cookie isn't found, or extraction fails, so the caller falls
+        This is the self-healing option: as long as you are logged into
+        perplexity.ai in the configured browser, the token is always current and
+        no static secret is stored in .env. It reuses yt-dlp's cookie extractor,
+        which is already a dependency. Returns None when not configured, the
+        browser or cookie is not found, or extraction fails, so the caller falls
         back to the static env-var token.
         """
         spec = self._config.perplexity_cookies_from_browser

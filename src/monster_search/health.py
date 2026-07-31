@@ -118,11 +118,12 @@ def _probe_whodat(config: Config) -> tuple[bool, str]:
 
 
 def _probe_zoekt(config: Config) -> tuple[bool, str]:
-    """Search for 'fn' — guaranteed match in the indexed monster-search repo.
+    """Search for 'fn' and require at least one hit.
 
-    Zoekt only indexes 2 repos (monster-search, isp-monitor) so broad
-    programming queries may return 0 results.  'fn' is a Rust/Python keyword
-    present in both repos and will always match.
+    A Zoekt instance only knows the repositories you have indexed into it, so
+    a probe query has to be something that matches almost any source tree
+    rather than a specific project. 'fn' appears in Rust and Python alike.
+    A zero-result answer here usually means an empty index, not a dead server.
 
     NOTE: The Zoekt API wraps results under {"Result": {"Files": [...]}},
     NOT at the top level.
@@ -765,7 +766,7 @@ if os.environ.get("MONSTER_SEMANTIC_SCHOLAR_API_KEY", ""):
     _PROBES["semantic_scholar"] = _probe_semantic_scholar
 
 # Gate grepapp probe on MONSTER_GREPAPP_ENABLED.
-# grep.app is permanently ASN-blocked from NordVPN exits — probing it when
+# grep.app rate-limits whole address ranges outright — probing it when
 # disabled would always show DOWN, which is misleading.
 if os.environ.get("MONSTER_GREPAPP_ENABLED", "").lower() in ("1", "true", "yes"):
     _PROBES["grepapp"] = _probe_grepapp

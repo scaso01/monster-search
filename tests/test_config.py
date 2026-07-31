@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
+import pytest
+
 from monster_search.config import Config
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_ENV_EXAMPLE = _REPO_ROOT / ".env.example"
+_CONFIG_SRC = _REPO_ROOT / "src" / "monster_search" / "config.py"
 
 
 def test_config_defaults(monkeypatch):
@@ -47,3 +56,60 @@ def test_config_local_researcher_from_env(monkeypatch):
     config = Config()
     assert config.local_researcher_url == "http://localhost:9300"
     assert config.local_researcher_timeout == 900
+
+
+# --- .env.example is documentation, so it is checked like documentation ------
+
+
+def _config_defaults() -> dict[str, str]:
+    """Every MONSTER_* default written as a plain literal in config.py."""
+    src = _CONFIG_SRC.read_text(encoding="utf-8")
+    return dict(
+        re.findall(r'os\.environ\.get\("(MONSTER_[A-Z0-9_]+)",\s*"([^"]*)"\)', src)
+    )
+
+
+def _env_example_values() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in _ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^(MONSTER_[A-Z0-9_]+)=(.*)$", line.strip())
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+@pytest.mark.skipif(
+    not _ENV_EXAMPLE.is_file(), reason="running against an installed copy, not the repo"
+)
+def test_env_example_matches_the_real_defaults():
+    """.env.example says "defaults are shown below", so they must be the defaults.
+
+    Four of them had drifted, which is the kind of thing nobody notices until
+    someone copies the file and wonders why their timeouts differ.
+    """
+    real = _config_defaults()
+    wrong = {
+        var: (val, real[var])
+        for var, val in _env_example_values().items()
+        if val and var in real and val != real[var]
+    }
+
+    assert wrong == {}, "\n".join(
+        f"{v}: .env.example says {a!r}, config.py defaults to {b!r}"
+        for v, (a, b) in wrong.items()
+    )
+
+
+@pytest.mark.skipif(
+    not _ENV_EXAMPLE.is_file(), reason="running against an installed copy, not the repo"
+)
+def test_env_example_documents_every_service_url():
+    """A URL nobody can discover is a service nobody can point anywhere.
+
+    Six self-hosted engines were missing from this file, so their only
+    documented address was localhost and there was no hint you could change it.
+    """
+    documented = set(_env_example_values())
+    url_vars = {v for v in _config_defaults() if v.endswith("_URL")}
+
+    assert url_vars - documented == set()

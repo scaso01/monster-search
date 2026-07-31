@@ -179,7 +179,7 @@ class AllEnginesClient:
             engines["zoekt"] = get_breaker("zoekt").call(
                 ZoektClient(config=config).asearch(query, max_results=max_results)
             )
-            # grepapp is gated — ASN-blocked from NordVPN exits (permanent 429).
+            # grepapp is gated: it 429s whole hosting and VPN ranges outright.
             # Set MONSTER_GREPAPP_ENABLED=true in .env to re-enable without VPN.
             if config.grepapp_enabled:
                 engines["grepapp"] = get_breaker("grepapp").call(

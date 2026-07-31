@@ -182,7 +182,7 @@ async def _run_category(
     # Gate semantic_scholar out when no API key is configured.
     if "semantic_scholar" in engine_names and not config.semantic_scholar_api_key:
         engine_names = [e for e in engine_names if e != "semantic_scholar"]
-    # Gate grepapp out when disabled (ASN-blocked from NordVPN exits).
+    # Gate grepapp out when disabled (it rate-limits whole address ranges).
     if "grepapp" in engine_names and not config.grepapp_enabled:
         engine_names = [e for e in engine_names if e != "grepapp"]
 
