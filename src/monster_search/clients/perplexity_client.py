@@ -127,6 +127,20 @@ class PerplexityClient:
                                 source="perplexity",
                             ))
 
+        if not answer and not sources:
+            # The request succeeded and the stream contained nothing usable,
+            # which in practice means an expired session cookie or a changed
+            # response shape rather than a query with no answer. Returning an
+            # empty answer here reads as success and leaves the user staring at
+            # a blank result, so this reports failure and lets the tiered search
+            # mark the engine down and use the others.
+            raise RuntimeError(
+                "Perplexity returned no answer and no sources. The session "
+                "cookie has most likely expired: log in to perplexity.ai again "
+                "in the browser named by MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER, "
+                "or refresh MONSTER_PERPLEXITY_SESSION_TOKEN."
+            )
+
         return answer, sources
 
     def search(self, query: str) -> tuple[str, list[SearchResult]]:

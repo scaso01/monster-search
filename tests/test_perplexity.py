@@ -165,3 +165,32 @@ async def test_perplexity_async_wraps_sync():
         message, results = await client.asearch("test")
         assert message == "answer"
         mock_search.assert_called_once_with("test")
+
+
+def test_parse_sse_raises_when_the_stream_yields_nothing():
+    """An empty parse means an expired session, not an answerless question.
+
+    Returning ("", []) here reported success and left the caller showing a
+    blank answer, and the tiered search counted the engine as having worked.
+    """
+    client = PerplexityClient(config=Config(perplexity_session_token="fake-token"))
+
+    with pytest.raises(RuntimeError, match="session cookie has most likely expired"):
+        client._parse_sse('data: {"text": "[]", "status": "COMPLETED"}\n')
+
+
+def test_parse_sse_accepts_sources_without_an_answer():
+    """Sources alone are a usable result, so that must not trip the guard."""
+    import json
+
+    client = PerplexityClient(config=Config(perplexity_session_token="fake-token"))
+    steps = json.dumps([
+        {"step_type": "SEARCH_RESULTS",
+         "content": {"results": [{"name": "R", "url": "https://e.example", "snippet": "s"}]}},
+    ])
+    answer, sources = client._parse_sse(
+        f'data: {json.dumps({"text": steps, "status": "COMPLETED"})}\n'
+    )
+
+    assert answer == ""
+    assert len(sources) == 1

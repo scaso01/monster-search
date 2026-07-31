@@ -162,9 +162,11 @@ def _handle_watch(argv: list[str]) -> None:
             tag_str = f" [{w.get('tag', '')}]" if w.get("tag") else ""
             print(f"  {w['uuid']}{tag_str}  {w.get('url', 'unknown')}")
     elif args.action == "check":
-        print(client.get_latest(args.uuid))
+        # A newly added watch has no snapshot until changedetection.io fetches
+        # the page, so say that rather than printing a blank line.
+        print(client.get_latest(args.uuid) or "No snapshot recorded for this watch yet.")
     elif args.action == "diff":
-        print(client.get_diff(args.uuid))
+        print(client.get_diff(args.uuid) or "No changes recorded for this watch yet.")
     elif args.action == "remove":
         ok = client.remove_watch(args.uuid)
         print("Removed." if ok else "Failed to remove.")

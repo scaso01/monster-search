@@ -88,3 +88,38 @@ def test_remove_watch():
     )
     client = ChangeDetectionClient(config=_config())
     assert client.remove_watch("abc-123") is True
+
+
+@respx.mock
+def test_get_latest_returns_empty_when_no_history_yet():
+    """A watch added seconds ago has no snapshot, and the API 404s for it.
+
+    That used to raise straight out of `monster-search watch check`, so adding
+    a watch and immediately checking it crashed.
+    """
+    respx.get(
+        "http://localhost:8086/api/v1/watch/abc/history/latest"
+    ).mock(return_value=httpx.Response(404))
+
+    assert ChangeDetectionClient(config=_config()).get_latest("abc") == ""
+
+
+@respx.mock
+def test_get_diff_returns_empty_when_nothing_to_compare():
+    """A diff needs two snapshots, so 404 here means "not changed yet"."""
+    respx.get(
+        "http://localhost:8086/api/v1/watch/abc/diff/latest"
+    ).mock(return_value=httpx.Response(404))
+
+    assert ChangeDetectionClient(config=_config()).get_diff("abc") == ""
+
+
+@respx.mock
+def test_get_latest_still_raises_on_a_real_error():
+    """404 is special-cased; a 500 is still a failure."""
+    respx.get(
+        "http://localhost:8086/api/v1/watch/abc/history/latest"
+    ).mock(return_value=httpx.Response(500))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ChangeDetectionClient(config=_config()).get_latest("abc")

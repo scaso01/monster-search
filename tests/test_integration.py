@@ -409,6 +409,120 @@ def test_fyin_over_ssh(config):
     assert message
 
 
+def test_searchcode_repo(config):
+    """Opt-in engine: needs an explicit repository, so it is never in a sweep."""
+    from monster_search.clients.searchcode_repo import SearchcodeRepoClient
+
+    _require_internet()
+    results = SearchcodeRepoClient(config=config).search(
+        "import", repository="https://github.com/encode/httpx", max_results=3
+    )
+    _assert_usable(results, "searchcode_repo")
+
+
+# --- scrapers ------------------------------------------------------------
+#
+# These parse retail HTML, which changes without notice and is served
+# differently to different addresses. A block or a layout change is not a
+# defect in this project, so an empty list is tolerated; a result that comes
+# back malformed is not.
+
+
+def test_amazon_deals(config):
+    from monster_search.clients.amazon_deals import AmazonDealsClient
+
+    _require_internet()
+    results = AmazonDealsClient(config=config).search("ssd", max_results=3)
+    if not results:
+        pytest.skip("Amazon returned nothing, most likely a block or a layout change")
+    _assert_usable(results, "amazon_deals")
+
+
+def test_newegg(config):
+    from monster_search.clients.newegg import NeweggClient
+
+    _require_internet()
+    results = NeweggClient(config=config).search("ssd", max_results=3)
+    if not results:
+        pytest.skip("Newegg returned nothing, most likely a block or a layout change")
+    _assert_usable(results, "newegg")
+
+
+def test_priceghost(config):
+    """Self-hosted price tracker. Needs credentials as well as a reachable host."""
+    from monster_search.clients.priceghost import PriceGhostClient
+
+    _require(config.priceghost_url, "priceghost")
+    if not (config.priceghost_email and config.priceghost_password):
+        pytest.skip("MONSTER_PRICEGHOST_EMAIL / _PASSWORD not set")
+    assert isinstance(
+        PriceGhostClient(config=config).search("ssd", max_results=3), list
+    )
+
+
+def test_perplexity(config):
+    """Needs a logged-in perplexity.ai session, from a browser profile or a cookie.
+
+    An expired cookie is a configuration problem on this machine rather than a
+    defect here, and the client now says so explicitly instead of handing back
+    an empty answer, so that case skips.
+    """
+    from monster_search.clients.perplexity_client import PerplexityClient
+
+    _require_internet()
+    if not (config.perplexity_cookies_from_browser or config.perplexity_session_token):
+        pytest.skip("no Perplexity session configured")
+
+    try:
+        message, _ = PerplexityClient(config=config).search("what is rust async")
+    except (ValueError, RuntimeError) as exc:
+        pytest.skip(f"Perplexity session unusable: {exc}")
+
+    assert message
+
+
+def test_grepapp(config):
+    """Off by default because grep.app rate-limits whole address ranges."""
+    from monster_search.clients.grepapp import GrepAppClient
+
+    _require_internet()
+    if not config.grepapp_enabled:
+        pytest.skip("MONSTER_GREPAPP_ENABLED not set")
+    _assert_usable(
+        GrepAppClient(config=config).search("async fn main", max_results=3), "grepapp"
+    )
+
+
+# --- watch subcommands, end to end ---------------------------------------
+
+
+def test_watch_round_trip(config):
+    """Add a watch, find it, read it, then remove it again.
+
+    The removal is the point: this creates real state on a real service, so it
+    cleans up after itself even when an assertion in the middle fails.
+    """
+    from monster_search.clients.changedetection_client import ChangeDetectionClient
+
+    _require(config.changedetection_url, "changedetection")
+    if not config.changedetection_api_key:
+        pytest.skip("MONSTER_CHANGEDETECTION_API_KEY not set")
+
+    client = ChangeDetectionClient(config=config)
+    created = client.add_watch("https://example.com", tag="monster-search-selftest")
+    uuid = created.get("uuid") if isinstance(created, dict) else None
+    assert uuid, f"add_watch returned no uuid: {created!r}"
+
+    try:
+        listed = client.list_watches()
+        assert any(w.get("uuid") == uuid for w in listed), "new watch missing from list"
+        # A brand new watch has not been fetched yet, so the snapshot may be
+        # empty. It must still be a string rather than an error.
+        assert isinstance(client.get_latest(uuid), str)
+    finally:
+        assert client.remove_watch(uuid) is True
+
+
 # --- AI engines (slow: roughly two minutes each) -------------------------
 
 

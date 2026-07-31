@@ -58,22 +58,36 @@ class ChangeDetectionClient:
         return result
 
     def get_latest(self, uuid: str) -> str:
-        """Get the latest snapshot text for a watch."""
+        """Get the latest snapshot text for a watch, or "" if there is none yet.
+
+        A watch that has been added but not yet fetched has no history, and the
+        API answers 404 for it. That is an ordinary state, not an error: adding
+        a watch and immediately checking it used to raise straight out of the
+        CLI. An unknown UUID also gives 404, so both read as "nothing recorded".
+        """
         client = get_client(self._config.changedetection_url, 30)
         resp = client.get(
             f"{self._base_url()}/watch/{uuid}/history/latest",
             headers=self._headers(),
         )
+        if resp.status_code == 404:
+            return ""
         resp.raise_for_status()
         return resp.text
 
     def get_diff(self, uuid: str) -> str:
-        """Get the latest diff for a watch."""
+        """Get the latest diff for a watch, or "" if there is nothing to compare.
+
+        A watch needs two snapshots before a diff exists, so 404 here means
+        "not changed yet" far more often than it means anything is wrong.
+        """
         client = get_client(self._config.changedetection_url, 30)
         resp = client.get(
             f"{self._base_url()}/watch/{uuid}/diff/latest",
             headers=self._headers(),
         )
+        if resp.status_code == 404:
+            return ""
         resp.raise_for_status()
         return resp.text
 
