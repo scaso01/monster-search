@@ -76,6 +76,35 @@ def _assert_usable(results, source: str) -> None:
         assert r.title, f"{source} returned a result with no title"
 
 
+def _require_searxng_upstreams(config: Config, query: str = "python") -> None:
+    """Skip when SearXNG itself has no working providers left.
+
+    SearXNG aggregates other engines, and those engines rate-limit, serve
+    CAPTCHAs and suspend instances on their own schedule. When every provider
+    is in that state SearXNG answers 200 with zero results and names them in
+    `unresponsive_engines`. That is an outage upstream of this project, so the
+    tests that depend on it skip with the reason rather than failing and
+    pointing the blame here. A SearXNG that returns results while our client
+    parses none of them still fails, which is the case worth catching.
+    """
+    import httpx as _httpx
+
+    try:
+        data = _httpx.get(
+            f"{config.searxng_url}/search",
+            params={"q": query, "format": "json"},
+            timeout=25,
+        ).json()
+    except _httpx.HTTPError as exc:
+        pytest.skip(f"SearXNG unreachable: {exc}")
+
+    if not data.get("results"):
+        pytest.skip(
+            "SearXNG has no working providers right now: "
+            f"{data.get('unresponsive_engines')}"
+        )
+
+
 # --- self-hosted: SearXNG ------------------------------------------------
 
 
@@ -83,6 +112,7 @@ def test_searxng_search(config):
     from monster_search.clients.searxng import SearXNGClient
 
     _require(config.searxng_url, "searxng")
+    _require_searxng_upstreams(config)
     results = SearXNGClient(config=config).search("python asyncio", max_results=3)
     _assert_usable(results, "searxng")
 
@@ -91,6 +121,7 @@ def test_searxng_news_category(config):
     from monster_search.clients.searxng import SearXNGClient
 
     _require(config.searxng_url, "searxng")
+    _require_searxng_upstreams(config)
     results = SearXNGClient(config=config).search(
         "technology", category="news", max_results=3
     )
@@ -130,6 +161,7 @@ def test_news_engine(config):
     from monster_search.clients.news import NewsSearchClient
 
     _require(config.searxng_url, "searxng")
+    _require_searxng_upstreams(config)
     _, results = NewsSearchClient(config=config).search("technology", max_results=3)
     _assert_usable(results, "news")
 
@@ -247,12 +279,26 @@ def test_huggingface(config):
 
 
 def test_reddit(config):
+    """Regression guard: this engine was returning nothing at all until 0.10.1.
+
+    Reddit rate-limits the feed per source address after a handful of requests,
+    so running this repeatedly in one sitting provokes a 429. That is throttling
+    rather than a broken engine, and it skips. A response that arrives but is
+    not a feed still fails, which is the failure mode that actually mattered.
+    """
+    import httpx as _httpx
+
     from monster_search.clients.reddit import RedditClient
 
     _require_internet()
-    _assert_usable(
-        RedditClient(config=config).search("self hosted search", max_results=3), "reddit"
-    )
+    try:
+        results = RedditClient(config=config).search("self hosted search", max_results=3)
+    except _httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            pytest.skip("rate limited by reddit (429), try again in a few minutes")
+        raise
+
+    _assert_usable(results, "reddit")
 
 
 def test_marginalia(config):
@@ -402,6 +448,7 @@ def test_synthesizer(config):
     _require(config.searxng_url, "searxng")
     _require(config.llama_url, "llama-server")
 
+    _require_searxng_upstreams(config)
     if not SearXNGClient(config=config).search("what is rust async", max_results=3):
         pytest.skip("SearXNG returned no sources, nothing for the synthesizer to write")
 
