@@ -31,10 +31,15 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _load_real_env():
-    """conftest strips MONSTER_* for unit isolation; these tests need it back."""
+    """Load .env for the live runs, without overriding the shell.
+
+    override=False so an explicit `MONSTER_X=... pytest` beats the .env file,
+    which is the precedence people expect and the only way to configure a
+    one-off live run against a different host.
+    """
     env_path = Path(__file__).resolve().parents[1] / ".env"
     if env_path.is_file():
-        load_dotenv(env_path, override=True)
+        load_dotenv(env_path, override=False)
 
 
 @pytest.fixture
@@ -105,6 +110,22 @@ def _require_searxng_upstreams(config: Config, query: str = "python") -> None:
         )
 
 
+def _assert_searxng_usable(results, config: Config, query: str, source: str) -> None:
+    """Fail only when SearXNG had providers and our client still saw nothing.
+
+    Probing upstreams before the search is not enough on its own: the providers
+    rate-limit and suspend between two requests a second apart, so the guard
+    could pass and the real query still come back empty through no fault of
+    ours. Re-checking with the query that actually failed is what separates
+    "their engines are down" from "we cannot parse a good response".
+    """
+    if results:
+        _assert_usable(results, source)
+        return
+    _require_searxng_upstreams(config, query)
+    pytest.fail(f"{source} returned nothing while SearXNG had working providers")
+
+
 # --- self-hosted: SearXNG ------------------------------------------------
 
 
@@ -114,7 +135,7 @@ def test_searxng_search(config):
     _require(config.searxng_url, "searxng")
     _require_searxng_upstreams(config)
     results = SearXNGClient(config=config).search("python asyncio", max_results=3)
-    _assert_usable(results, "searxng")
+    _assert_searxng_usable(results, config, "python asyncio", "searxng")
 
 
 def test_searxng_news_category(config):
@@ -125,7 +146,7 @@ def test_searxng_news_category(config):
     results = SearXNGClient(config=config).search(
         "technology", category="news", max_results=3
     )
-    _assert_usable(results, "searxng news")
+    _assert_searxng_usable(results, config, "technology", "searxng news")
 
 
 def test_searxng_shopping_category(config):
@@ -163,7 +184,7 @@ def test_news_engine(config):
     _require(config.searxng_url, "searxng")
     _require_searxng_upstreams(config)
     _, results = NewsSearchClient(config=config).search("technology", max_results=3)
-    _assert_usable(results, "news")
+    _assert_searxng_usable(results, config, "technology", "news")
 
 
 # --- self-hosted: everything else ----------------------------------------
@@ -488,9 +509,15 @@ def test_grepapp(config):
     _require_internet()
     if not config.grepapp_enabled:
         pytest.skip("MONSTER_GREPAPP_ENABLED not set")
-    _assert_usable(
-        GrepAppClient(config=config).search("async fn main", max_results=3), "grepapp"
-    )
+    try:
+        results = GrepAppClient(config=config).search("async fn main", max_results=3)
+    except RuntimeError as exc:
+        # grep.app blocks whole hosting and VPN ranges, which is the reason the
+        # engine ships disabled. Reporting that as our failure would be wrong.
+        if "429" in str(exc):
+            pytest.skip(f"grep.app rate-limited this address: {exc}")
+        raise
+    _assert_usable(results, "grepapp")
 
 
 # --- watch subcommands, end to end ---------------------------------------
