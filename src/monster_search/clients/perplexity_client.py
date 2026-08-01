@@ -66,6 +66,18 @@ class PerplexityClient:
         sources: list[SearchResult] = []
         seen_urls: set[str] = set()
 
+        def add_source(item: dict) -> None:
+            """Record one web result, ignoring repeats of a URL already seen."""
+            url = item.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                sources.append(SearchResult(
+                    title=item.get("name", ""),
+                    url=url,
+                    snippet=item.get("snippet", ""),
+                    source="perplexity",
+                ))
+
         for line in text.split("\n"):
             if not line.startswith("data: "):
                 continue
@@ -78,6 +90,22 @@ class PerplexityClient:
                 raise RuntimeError(
                     f"Perplexity query failed: {data.get('text', 'Unknown error')}"
                 )
+
+            # Current response shape: the answer and the sources arrive as
+            # entries in a "blocks" array, each tagged with intended_usage.
+            # Blocks are re-sent as the answer streams, so the last one wins.
+            # The older "text"-of-steps shape is still handled below, because
+            # this endpoint has served both and neither is documented.
+            for block in data.get("blocks") or []:
+                usage = block.get("intended_usage")
+                if usage == "ask_text":
+                    streamed = (block.get("markdown_block") or {}).get("answer") or ""
+                    if streamed:
+                        answer = streamed
+                elif usage == "web_results":
+                    web_block = block.get("web_result_block") or {}
+                    for item in web_block.get("web_results") or []:
+                        add_source(item)
 
             raw_text = data.get("text", "")
             if not raw_text:
@@ -103,29 +131,13 @@ class PerplexityClient:
                         parsed = json.loads(inner)
                         answer = parsed.get("answer", "")
                         for ref in parsed.get("web_results", []):
-                            url = ref.get("url", "")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                sources.append(SearchResult(
-                                    title=ref.get("name", ""),
-                                    url=url,
-                                    snippet=ref.get("snippet", ""),
-                                    source="perplexity",
-                                ))
+                            add_source(ref)
                     except json.JSONDecodeError:
                         answer = inner
 
                 elif step_type == "SEARCH_RESULTS":
                     for r in content.get("results", []):
-                        url = r.get("url", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            sources.append(SearchResult(
-                                title=r.get("name", ""),
-                                url=url,
-                                snippet=r.get("snippet", ""),
-                                source="perplexity",
-                            ))
+                        add_source(r)
 
         if not answer and not sources:
             # The request succeeded and the stream contained nothing usable,

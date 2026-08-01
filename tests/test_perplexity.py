@@ -194,3 +194,57 @@ def test_parse_sse_accepts_sources_without_an_answer():
 
     assert answer == ""
     assert len(sources) == 1
+
+
+def test_parse_sse_reads_the_blocks_response_shape():
+    """The live API returns blocks, not a JSON-encoded "text" field of steps.
+
+    This is the shape the endpoint actually served while every mocked test
+    still passed against the retired one, so the client returned nothing for
+    a perfectly good 44KB response. Keep both shapes covered.
+    """
+    import json
+
+    client = PerplexityClient(config=Config(perplexity_session_token="fake-token"))
+    message = {
+        "status": "COMPLETED",
+        "final_sse_message": True,
+        "blocks": [
+            {"intended_usage": "ask_text",
+             "markdown_block": {"answer": "Asyncio runs coroutines on an event loop."}},
+            {"intended_usage": "web_results",
+             "web_result_block": {"web_results": [
+                 {"name": "Real Python", "url": "https://realpython.com/async-io-python/",
+                  "snippet": "Hands-on walkthrough"},
+                 {"name": "Docs", "url": "https://docs.python.org/3/library/asyncio.html",
+                  "snippet": "Standard library reference"},
+             ]}},
+        ],
+    }
+
+    answer, sources = client._parse_sse(f"data: {json.dumps(message)}\n")
+
+    assert answer == "Asyncio runs coroutines on an event loop."
+    assert [s.url for s in sources] == [
+        "https://realpython.com/async-io-python/",
+        "https://docs.python.org/3/library/asyncio.html",
+    ]
+    assert sources[0].title == "Real Python"
+    assert all(s.source == "perplexity" for s in sources)
+
+
+def test_parse_sse_keeps_the_last_streamed_answer_block():
+    """Blocks are re-sent as the answer streams, so partials must not win."""
+    import json
+
+    client = PerplexityClient(config=Config(perplexity_session_token="fake-token"))
+    partial = {"blocks": [{"intended_usage": "ask_text",
+                           "markdown_block": {"answer": "Asyncio runs"}}]}
+    complete = {"blocks": [{"intended_usage": "ask_text",
+                            "markdown_block": {"answer": "Asyncio runs coroutines."}}]}
+
+    answer, _ = client._parse_sse(
+        f"data: {json.dumps(partial)}\ndata: {json.dumps(complete)}\n"
+    )
+
+    assert answer == "Asyncio runs coroutines."
