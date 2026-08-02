@@ -7,6 +7,7 @@ covers the rest of the documented command line, which previously had none.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -208,15 +209,20 @@ def test_grepapp_disabled_exits_cleanly(capsys):
     assert "~/Projects" not in err
 
 
+# The shape of a developer path, not one author's name. Spelling a real username
+# here would publish the very thing this test exists to keep out, and matching the
+# shape catches any contributor's home directory rather than only the first one.
+DEVELOPER_PATH = re.compile(r"~/Projects|[Uu]sers[\\/][A-Za-z0-9._-]+[\\/]")
+
+
 def test_no_developer_paths_in_the_shipped_package():
     """A public package must not tell users to edit a path only its author has."""
     root = Path(monster_search.__file__).parent
-    offenders = [
+    offenders = sorted(
         path.name
         for path in root.rglob("*.py")
-        if "~/Projects" in path.read_text(encoding="utf-8")
-        or "Users\\seanc" in path.read_text(encoding="utf-8")
-    ]
+        if DEVELOPER_PATH.search(path.read_text(encoding="utf-8"))
+    )
 
     assert offenders == []
 
