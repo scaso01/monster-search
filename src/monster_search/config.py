@@ -8,12 +8,23 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env at import time so Config() always sees MONSTER_* vars,
-# whether invoked via CLI or as a library.
-if not load_dotenv():
-    _pkg_env = Path(__file__).resolve().parents[2] / ".env"
-    if _pkg_env.is_file():
-        load_dotenv(_pkg_env)
+# Load .env at import time so Config() always sees MONSTER_* vars, whether
+# invoked via CLI or as a library.
+#
+# The package .env is loaded UNCONDITIONALLY. It used to be a fallback behind
+# `if not load_dotenv():`, which quietly broke whenever any unrelated .env
+# happened to sit in the search path: find_dotenv() would return that file,
+# load_dotenv() would report success, and this package's own settings were
+# never read at all — every MONSTER_* value silently fell back to its default.
+# A stray one-line .env in a home directory was enough to do it.
+#
+# load_dotenv() never overwrites a variable that is already set, so loading the
+# discovered file first and the package file second gives the precedence you
+# want: real environment > nearest .env > this package's .env.
+load_dotenv()
+_pkg_env = Path(__file__).resolve().parents[2] / ".env"
+if _pkg_env.is_file():
+    load_dotenv(_pkg_env)
 
 
 @dataclass(frozen=True, slots=True)

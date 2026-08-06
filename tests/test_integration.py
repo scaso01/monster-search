@@ -251,12 +251,28 @@ def test_arxiv(config):
 
 
 def test_openalex(config):
+    """OpenAlex meters requests against a daily budget per source address.
+
+    Once that budget is spent it answers 429 with "Insufficient budget ...
+    Resets at midnight UTC" for everything, including requests that carry a
+    mailto for the polite pool. Behind a shared egress address the budget can
+    be gone before this suite makes its first call, which is throttling rather
+    than a broken client, so it skips — same treatment as reddit above. A
+    response that arrives but is not usable still fails.
+    """
+    import httpx as _httpx
+
     from monster_search.clients.openalex import OpenAlexClient
 
     _require_internet()
-    _assert_usable(
-        OpenAlexClient(config=config).search("machine learning", max_results=3), "openalex"
-    )
+    try:
+        results = OpenAlexClient(config=config).search("machine learning", max_results=3)
+    except _httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            pytest.skip("openalex daily budget exhausted (429), resets at midnight UTC")
+        raise
+
+    _assert_usable(results, "openalex")
 
 
 def test_osv_vulnerabilities(config):
