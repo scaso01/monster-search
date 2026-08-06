@@ -17,8 +17,21 @@ documented explicitly in their probe docstrings.
 
 Health dict values
 ------------------
-True  → UP (produced ≥1 result or confirmed configured + reachable)
-False → DOWN (connection refused, wrong status, 0 results, missing key, etc.)
+True            → UP (produced ≥1 result or confirmed configured + reachable)
+False           → DOWN (connection refused, wrong status, 0 results, ...)
+NOT_CONFIGURED  → the engine is optional and this install has not set it up:
+                  a missing API key, an unset host, an uninstalled extra.
+
+NOT_CONFIGURED exists because reporting "no API key set" as DOWN is wrong in
+both directions. On a dashboard it parks a permanent red row for something
+that was never switched on, which is the kind of standing alarm people learn
+to ignore; and on a fresh clone it lights up every optional engine at once,
+so the tool reads as broken when it is merely waiting for configuration.
+Something you have not set up is not something that has failed.
+
+check_health() still returns plain bools, where NOT_CONFIGURED is False, so
+existing callers are unaffected. check_health_with_latency() carries the
+distinction on the per-engine "configured" key.
 
 The reason for DOWN is surfaced in the health_reasons dict that
 check_health() also returns as a second value.
@@ -43,6 +56,23 @@ from monster_search.clients.archive_org import (
     _build_advanced_ssh_command,
 )
 from monster_search.config import Config
+
+
+class _NotConfigured:
+    """Sentinel returned by a probe for an optional engine this install has
+    not set up. Deliberately not a bool subclass: it must never be mistaken
+    for True by a caller that only checks truthiness."""
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "NOT_CONFIGURED"
+
+
+NOT_CONFIGURED = _NotConfigured()
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -147,7 +177,7 @@ def _probe_zoekt(config: Config) -> tuple[bool, str]:
 def _probe_changedetection(config: Config) -> tuple[bool, str]:
     """System info check — changedetection.io is a utility service, not a query engine."""
     if not config.changedetection_api_key:
-        return False, "no MONSTER_CHANGEDETECTION_API_KEY set"
+        return NOT_CONFIGURED, "no MONSTER_CHANGEDETECTION_API_KEY set"
     try:
         with _client(timeout=5) as c:
             resp = c.get(
@@ -221,12 +251,12 @@ def _probe_perplexity(config: Config) -> tuple[bool, str]:
     browser-cookie path (the engine actually works) — hence both are accepted.
     """
     if not config.perplexity_session_token and not config.perplexity_cookies_from_browser:
-        return False, (
+        return NOT_CONFIGURED, (
             "no MONSTER_PERPLEXITY_SESSION_TOKEN or "
             "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER set"
         )
     if importlib.util.find_spec("curl_cffi") is None:
-        return False, "curl_cffi not installed (pip install curl_cffi)"
+        return NOT_CONFIGURED, "curl_cffi not installed (pip install curl_cffi)"
     return True, ""
 
 
@@ -461,9 +491,9 @@ def _probe_youtube(_config: Config) -> tuple[bool, str]:
     all YouTube searches will fail at runtime.
     """
     if importlib.util.find_spec("yt_dlp") is None:
-        return False, "yt-dlp not installed"
+        return NOT_CONFIGURED, "yt-dlp not installed"
     if importlib.util.find_spec("youtube_transcript_api") is None:
-        return False, "youtube-transcript-api not installed"
+        return NOT_CONFIGURED, "youtube-transcript-api not installed"
     return True, ""
 
 
@@ -627,7 +657,7 @@ def _probe_reddit(config: Config) -> tuple[bool, str]:
 def _probe_fyin(config: Config) -> tuple[bool, str]:
     """Check the fyin binary exists on the configured SSH host."""
     if not config.ssh_host:
-        return False, "MONSTER_SSH_HOST not set — fyin is disabled"
+        return NOT_CONFIGURED, "MONSTER_SSH_HOST not set — fyin is disabled"
     try:
         result = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=3", config.ssh_host,
@@ -825,7 +855,7 @@ def check_health_with_latency(
     config = config or Config()
     out: dict[str, dict] = {}
 
-    def _timed(probe: Callable[[Config], tuple[bool, str]]) -> tuple[bool, str, int]:
+    def _timed(probe: Callable[[Config], tuple[bool, str]]) -> tuple[object, str, int]:
         t0 = time.perf_counter()
         try:
             is_up, reason = probe(config)
@@ -848,6 +878,13 @@ def check_health_with_latency(
                 is_up = False
                 reason = f"future raised {type(exc).__name__}: {exc}"
                 latency_ms = 0
-            out[name] = {"up": is_up, "latency_ms": latency_ms, "reason": reason}
+            # "up" stays a plain bool so every existing caller keeps working;
+            # NOT_CONFIGURED is carried separately rather than folded into it.
+            out[name] = {
+                "up": is_up is True,
+                "configured": is_up is not NOT_CONFIGURED,
+                "latency_ms": latency_ms,
+                "reason": reason,
+            }
 
     return out

@@ -7,7 +7,7 @@ import httpx
 import respx
 
 from monster_search.config import Config
-from monster_search.health import check_health, _probe_perplexity
+from monster_search.health import NOT_CONFIGURED, check_health, _probe_perplexity
 
 
 # ---------------------------------------------------------------------------
@@ -301,14 +301,20 @@ def test_health_archive_org_ssh_fails(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_probe_perplexity_down_when_no_auth_configured():
-    """Neither static token nor browser-cookie path → DOWN."""
+def test_probe_perplexity_not_configured_when_no_auth_configured():
+    """Neither static token nor browser-cookie path → NOT_CONFIGURED.
+
+    Not DOWN: nothing failed, the engine was simply never set up here. It still
+    has to be falsy, so callers that only test truthiness keep working.
+    """
     with patch.dict(os.environ, {
         "MONSTER_PERPLEXITY_SESSION_TOKEN": "",
         "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "",
     }, clear=False):
         ok, reason = _probe_perplexity(Config())
-    assert ok is False
+    assert ok is NOT_CONFIGURED
+    assert not ok
+    assert ok is not False, "must stay distinguishable from a real failure"
     assert "MONSTER_PERPLEXITY" in reason
 
 
@@ -333,3 +339,27 @@ def test_probe_perplexity_up_with_static_token():
     }, clear=False):
         ok, reason = _probe_perplexity(Config())
     assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# NOT_CONFIGURED sentinel
+# ---------------------------------------------------------------------------
+
+def test_not_configured_is_falsy_but_not_false():
+    """Truthiness must keep every existing caller correct, while `is False`
+    stays available to tell a real failure apart from an unset engine."""
+    assert not NOT_CONFIGURED
+    assert NOT_CONFIGURED is not False
+    assert bool(NOT_CONFIGURED) is False
+    assert repr(NOT_CONFIGURED) == "NOT_CONFIGURED"
+
+
+def test_check_health_reports_unconfigured_engines_as_false():
+    """The bool-only API is unchanged: an unset engine is still not up."""
+    with patch.dict(os.environ, {
+        "MONSTER_PERPLEXITY_SESSION_TOKEN": "",
+        "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "",
+    }, clear=False):
+        ok, _ = _probe_perplexity(Config())
+    assert ok is not True
+    assert bool(ok) is False

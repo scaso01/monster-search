@@ -334,9 +334,18 @@ def main(argv: list[str] | None = None) -> None:
     if args.health:
         records = check_health_with_latency(config)
         for name, rec in records.items():
-            indicator = "UP" if rec["up"] else "DOWN"
+            if rec["up"]:
+                indicator = "UP"
+            elif not rec.get("configured", True):
+                # Optional engine this install never set up — not a failure.
+                indicator = "UNCONFIGURED"
+            else:
+                indicator = "DOWN"
             latency_s = rec["latency_ms"] / 1000.0
-            print(f"  {name}: {indicator} ({latency_s:.2f}s)")
+            line = f"  {name}: {indicator} ({latency_s:.2f}s)"
+            if indicator != "UP" and rec.get("reason"):
+                line += f" — {rec['reason']}"
+            print(line)
         return
 
     if args.benchmark:
