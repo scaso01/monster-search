@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 ENGINE_CHOICES = [
     # Web engines
     "searxng", "local_researcher",
-    "marginalia", "mwmbl", "crawl", "perplexity", "news", "archive_org", "youtube", "github_repos", "all",
+    "marginalia", "mwmbl", "ddg", "crawl", "perplexity", "news", "archive_org", "youtube", "github_repos", "all",
     # Category engines
     "semantic_scholar", "arxiv", "openalex",
     "osv", "deps", "gnews", "whodat", "zoekt",
@@ -412,6 +412,9 @@ def main(argv: list[str] | None = None) -> None:
         elif engine == "mwmbl":
             from monster_search.clients.mwmbl import MwmblClient
             results = MwmblClient(config=config).search(query, max_results=max_results)
+        elif engine == "ddg":
+            from monster_search.clients.ddg_browser import DdgBrowserClient
+            results = DdgBrowserClient(config=config).search(query, max_results=max_results)
         elif engine == "crawl":
             from monster_search.clients.crawl4ai_client import Crawl4AIClient
             cc = Crawl4AIClient(config=config)
