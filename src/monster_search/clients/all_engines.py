@@ -24,6 +24,7 @@ from monster_search.clients.synthesizer import SynthesizerClient
 from monster_search.clients.searxng import SearXNGClient
 from monster_search.clients.semantic_scholar import SemanticScholarClient
 from monster_search.clients.whodat import WhoDatClient
+from monster_search.clients.ddg_browser import DdgBrowserClient
 from monster_search.clients.fyin import FyinClient
 from monster_search.clients.khoj import KhojClient
 from monster_search.clients.vane import VaneClient
@@ -117,6 +118,15 @@ class AllEnginesClient:
             ),
             "mwmbl": get_breaker("mwmbl").call(
                 MwmblClient(config=config).asearch(query, max_results=max_results)
+            ),
+            **(
+                {
+                    "ddg": get_breaker("ddg").call(
+                        DdgBrowserClient(config=config).asearch(query, max_results=max_results)
+                    )
+                }
+                if config.ddg_enabled
+                else {}
             ),
             "news": get_breaker("news").call(
                 NewsSearchClient(config=config).asearch(query, max_results=max_results)
@@ -360,6 +370,17 @@ class AllEnginesClient:
                 ),
                 "mwmbl": lambda: get_breaker("mwmbl").call(
                     MwmblClient(config=config).asearch(query, max_results=max_results)
+                ),
+                **(
+                    {
+                        "ddg": lambda: get_breaker("ddg").call(
+                            DdgBrowserClient(config=config).asearch(
+                                query, max_results=max_results
+                            )
+                        )
+                    }
+                    if config.ddg_enabled
+                    else {}
                 ),
                 "news": lambda: get_breaker("news").call(
                     NewsSearchClient(config=config).asearch(query, max_results=max_results)
