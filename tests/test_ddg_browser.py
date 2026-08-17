@@ -125,3 +125,26 @@ def test_live_ddg_returns_results() -> None:
     results = _client().search("tokio rust", max_results=5)
     assert results, "live DuckDuckGo search returned nothing"
     assert all(r.url.startswith("http") for r in results)
+
+
+def test_ddg_is_off_by_default_for_fresh_installs(monkeypatch) -> None:
+    """A stranger without Crawl4AI must not inherit a guaranteed-failing engine."""
+    monkeypatch.delenv("MONSTER_DDG_ENABLED", raising=False)
+    assert Config().ddg_enabled is False
+
+
+def test_ddg_enabled_by_env(monkeypatch) -> None:
+    monkeypatch.setenv("MONSTER_DDG_ENABLED", "true")
+    assert Config().ddg_enabled is True
+
+
+def test_smart_search_includes_ddg_only_when_enabled(monkeypatch) -> None:
+    from monster_search.clients.all_engines import AllEnginesClient
+
+    monkeypatch.setenv("MONSTER_DDG_ENABLED", "true")
+    on = AllEnginesClient(config=Config())._build_engines("q", 5)
+    assert "ddg" in on
+
+    monkeypatch.setenv("MONSTER_DDG_ENABLED", "false")
+    off = AllEnginesClient(config=Config())._build_engines("q", 5)
+    assert "ddg" not in off

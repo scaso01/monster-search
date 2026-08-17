@@ -228,6 +228,17 @@ class Config:
         default_factory=lambda: int(os.environ.get("MONSTER_YOUTUBE_MAX_TRANSCRIPT_CHARS", "2000"))
     )
 
+    # DuckDuckGo via Crawl4AI's headless browser.
+    # ddg_enabled defaults False because this engine needs a running Crawl4AI
+    # service (MONSTER_CRAWL4AI_URL); on an install without one, every smart
+    # search would carry a guaranteed failure. DuckDuckGo blocks plain HTTP
+    # clients by TLS fingerprint, so a browser is the only path that works.
+    # Set MONSTER_DDG_ENABLED=true once Crawl4AI is reachable.
+    ddg_enabled: bool = field(
+        default_factory=lambda: os.environ.get("MONSTER_DDG_ENABLED", "").lower()
+        in ("1", "true", "yes")
+    )
+
     # grep.app code search
     # grepapp_enabled defaults False: grep.app rate-limits whole hosting and
     # VPN address ranges, returning HTTP 429 in under a second, so it fails
