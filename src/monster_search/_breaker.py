@@ -102,7 +102,7 @@ class EngineBreaker:
 # --- Registry ---
 
 _FAST_ENGINES = frozenset({
-    "searxng", "marginalia", "mwmbl", "news", "semantic_scholar", "arxiv",
+    "searxng", "ddg", "marginalia", "mwmbl", "news", "semantic_scholar", "arxiv",
     "openalex", "osv", "deps", "gnews", "whodat", "zoekt", "archive_org",
     "youtube", "grepapp", "github_code",
     "hackernews", "huggingface", "reddit", "github_repos",

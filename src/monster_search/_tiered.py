@@ -23,6 +23,8 @@ ENGINE_TIERS: dict[str, list[str]] = {
         "priceghost",
     ],
     "tier2_medium": [
+        # Browser-rendered: ~3s, but the only path DuckDuckGo accepts.
+        "ddg",
         "vane", "khoj", "fyin",
         "amazon_deals", "newegg",
     ],

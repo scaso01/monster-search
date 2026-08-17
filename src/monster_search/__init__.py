@@ -7,6 +7,7 @@ from monster_search.config import Config
 from monster_search.clients.searxng import SearXNGClient
 from monster_search.clients.perplexica import PerplexicaClient
 from monster_search.clients.local_researcher import LocalResearcherClient
+from monster_search.clients.ddg_browser import DdgBrowserClient
 from monster_search.clients.marginalia import MarginaliaClient
 from monster_search.clients.mwmbl import MwmblClient
 from monster_search.clients.crawl4ai_client import Crawl4AIClient
@@ -52,6 +53,7 @@ __all__ = [
     "SearXNGClient",
     "PerplexicaClient",
     "LocalResearcherClient",
+    "DdgBrowserClient",
     "MarginaliaClient",
     "MwmblClient",
     "Crawl4AIClient",

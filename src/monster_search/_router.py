@@ -141,7 +141,7 @@ _CATEGORY_ENGINES: dict[QueryCategory, list[str]] = {
     QueryCategory.DEEP_RESEARCH: [
         "vane", "khoj", "searxng",
     ],
-    QueryCategory.GENERAL: ["searxng", "marginalia", "mwmbl", "perplexity", "hackernews", "reddit"],
+    QueryCategory.GENERAL: ["searxng", "ddg", "marginalia", "mwmbl", "perplexity", "hackernews", "reddit"],
 }
 
 

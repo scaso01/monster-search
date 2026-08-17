@@ -382,6 +382,23 @@ def _probe_gnews(_config: Config) -> tuple[bool, str]:
         return False, f"XML parse error: {exc}"
 
 
+def _probe_ddg(config: Config) -> tuple[bool, str]:
+    """Run a real DuckDuckGo query through Crawl4AI and require >=1 result.
+
+    Probing the Crawl4AI port alone would say UP while DuckDuckGo refuses us --
+    the failure this engine exists to survive. So the probe searches for real.
+    """
+    try:
+        from monster_search.clients.ddg_browser import DdgBrowserClient
+
+        results = DdgBrowserClient(config=config).search("tokio", max_results=1)
+    except httpx.HTTPError as exc:
+        return False, f"connection error: {exc}"
+    if not results:
+        return False, "0 results (extraction schema or upstream block)"
+    return True, f"{len(results)} result(s)"
+
+
 def _probe_marginalia(config: Config) -> tuple[bool, str]:
     """Query Marginalia for 'tokio' and require ≥1 result.
 
@@ -774,6 +791,7 @@ _PROBES: dict[str, Callable[[Config], tuple[bool, str]]] = {
     "osv": _probe_osv,
     "deps": _probe_deps,
     "gnews": _probe_gnews,
+    "ddg": _probe_ddg,
     "marginalia": _probe_marginalia,
     "mwmbl": _probe_mwmbl,
     "archive_org": _probe_archive_org,

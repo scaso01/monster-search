@@ -13,7 +13,7 @@ from monster_search.models import SearchResult
 # semantic_scholar is omitted when no MONSTER_SEMANTIC_SCHOLAR_API_KEY is set —
 # running it without a key triggers 429s and skews the benchmark table.
 _BASE_BENCHMARKABLE_ENGINES = [
-    "searxng", "marginalia", "mwmbl", "news", "gnews",
+    "searxng", "ddg", "marginalia", "mwmbl", "news", "gnews",
     "arxiv", "openalex",
     "osv", "deps", "whodat", "zoekt",
     "archive_org", "perplexity", "synthesizer", "local_researcher",
@@ -51,6 +51,10 @@ def _run_engine(
     if engine == "searxng":
         from monster_search.clients.searxng import SearXNGClient
         r = SearXNGClient(config=config).search(query, max_results=max_results)
+        return "ok", r
+    elif engine == "ddg":
+        from monster_search.clients.ddg_browser import DdgBrowserClient
+        r = DdgBrowserClient(config=config).search(query, max_results=max_results)
         return "ok", r
     elif engine == "marginalia":
         from monster_search.clients.marginalia import MarginaliaClient
