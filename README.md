@@ -4,7 +4,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Ask one question, get answers from 34 search engines at once. Web, academic,
+Ask one question, get answers from 35 search engines at once. Web, academic,
 code, security, packages, WHOIS, news, video, AI, community, archive and
 shopping, behind a single CLI and Python API.
 
@@ -41,7 +41,7 @@ monster-search --health
 
 ## Engines
 
-34 engines organized into 12 categories, executed in 3 priority tiers.
+35 engines organized into 12 categories, executed in 3 priority tiers.
 
 ### Engine Table
 
@@ -50,6 +50,7 @@ monster-search --health
 | SearXNG | Web General | 1 | Self-hosted (Docker, :8080) | ~3-4s |
 | Marginalia | Web General | 1 | External API | ~3s |
 | mwmbl | Web General | 1 | External API | ~3s |
+| DuckDuckGo | Web General | 2 | Crawl4AI browser (opt-in) | ~3s |
 | Perplexity | Web AI | 1 | External (cookie auth) | ~30s |
 | Synthesizer | Web AI | 1 | SearXNG + Crawl4AI + llama-server | ~30-60s |
 | Vane | Web AI | 2 | Self-hosted (Docker, :3004) | ~2 min |
@@ -399,6 +400,7 @@ Key variables:
 | `MONSTER_CHANGEDETECTION_API_KEY` | -- | changedetection.io API key |
 | `MONSTER_SEMANTIC_SCHOLAR_API_KEY` | -- | Free key; without one the engine is skipped |
 | `MONSTER_GREPAPP_ENABLED` | `false` | grep.app is off by default (it 429s many networks) |
+| `MONSTER_DDG_ENABLED` | `false` | DuckDuckGo via Crawl4AI. Off unless you run a Crawl4AI service -- DDG blocks plain HTTP clients on TLS fingerprint, so a browser is the only path that works |
 
 `.env.example` lists every variable with its real default. The two are checked
 against each other, so if a default here disagrees with the code, that is a bug.
