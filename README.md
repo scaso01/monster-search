@@ -4,7 +4,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Ask one question, get answers from 35 search engines at once. Web, academic,
+Ask one question, get answers from 34 search engines at once. Web, academic,
 code, security, packages, WHOIS, news, video, AI, community, archive and
 shopping, behind a single CLI and Python API.
 
@@ -41,7 +41,7 @@ monster-search --health
 
 ## Engines
 
-35 engines organized into 12 categories, executed in 3 priority tiers.
+34 engines organized into 12 categories, executed in 3 priority tiers.
 
 ### Engine Table
 
@@ -82,7 +82,8 @@ monster-search --health
 
 **Notes:**
 - Tier 1 engines run on every query by default (always-on + router-gated specialists).
-- Tier 2 engines auto-promote when tier 1 results are sparse (< 3 results).
+- Tier 2 engines auto-promote when tier 1 results are sparse (< 3 results), or with `--deep`.
+- A category that routes to a tier 2 engine runs *that* engine only, not the whole tier — otherwise one cheap engine (ddg, in general queries) drags in the multi-minute AI engines.
 - Tier 3 engines only run with `--deep` or for deep-research queries.
 - Crawl4AI takes URLs (page extraction), not queries. changedetection.io monitors URL changes.
 - Meilisearch runs as a background result cache (not a search engine).
@@ -189,12 +190,12 @@ monster-search --engine packages "npm:express"     # deps
 monster-search --engine whois "example.com"        # whodat
 monster-search --engine video "rust tutorial"      # youtube
 monster-search --engine ai_ml "text generation"    # huggingface
-monster-search --engine shopping "laptop"          # searxng shopping + slickdeals + cheapshark
-                                                   #   + deals_rss + priceghost + amazon + newegg
+monster-search --engine shopping "laptop"          # slickdeals + cheapshark + deals_rss
+                                                   #   + priceghost + amazon + newegg
 monster-search --engine deals "ssd"                # slickdeals + deals_rss + amazon
 
 # Full sweep
-monster-search --engine all "query"                # all 34 engines (~2-5 min)
+monster-search --engine all "query"                # every engine (~2-5 min)
 ```
 
 An alias runs its engines concurrently and merges what comes back, so a single
