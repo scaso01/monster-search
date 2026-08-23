@@ -130,8 +130,13 @@ _CATEGORY_ENGINES: dict[QueryCategory, list[str]] = {
     QueryCategory.ARCHIVE: ["archive_org", "searxng"],
     QueryCategory.VIDEO: ["youtube", "searxng"],
     QueryCategory.AI_ML: ["huggingface", "searxng"],
+    # searxng_shopping is deliberately absent: SearXNG's shopping category
+    # resolves to a single engine (geizhals), which answers 403 behind a
+    # Cloudflare challenge that even a headless browser does not clear. The
+    # dedicated retailer clients below are the working coverage. It remains
+    # available as an explicit --engine choice for anyone geizhals answers.
     QueryCategory.SHOPPING: [
-        "searxng_shopping", "slickdeals", "cheapshark", "deals_rss",
+        "slickdeals", "cheapshark", "deals_rss",
         "priceghost", "amazon_deals", "newegg", "searxng",
     ],
     # NOTE: local_researcher is tier-3 (3-8 min) and was hanging smart-tiered

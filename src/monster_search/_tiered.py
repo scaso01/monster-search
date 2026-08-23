@@ -13,7 +13,7 @@ from monster_search.models import SearchResult
 
 ENGINE_TIERS: dict[str, list[str]] = {
     "tier1_fast": [
-        "searxng", "searxng_shopping", "marginalia", "mwmbl", "news", "gnews", "openalex",
+        "searxng", "marginalia", "mwmbl", "news", "gnews", "openalex",
         "archive_org", "osv", "deps", "whodat", "zoekt",
         "arxiv", "semantic_scholar", "meilisearch",
         "perplexity", "synthesizer",

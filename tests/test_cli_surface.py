@@ -264,7 +264,6 @@ def test_benchmark_with_a_category_runs_the_full_set():
 
 
 SHOPPING_CLIENTS = {
-    "searxng_shopping": "monster_search.clients.shopping.ShoppingSearchClient",
     "slickdeals": "monster_search.clients.slickdeals.SlickdealsClient",
     "cheapshark": "monster_search.clients.cheapshark.CheapSharkClient",
     "deals_rss": "monster_search.clients.deals_rss.DealsRSSClient",
@@ -274,9 +273,15 @@ SHOPPING_CLIENTS = {
 }
 
 
-def test_shopping_alias_includes_the_searxng_shopping_engine():
-    """Regression: this engine had a dispatch branch no category could reach."""
-    assert "searxng_shopping" in ENGINE_CATEGORIES["shopping"]
+def test_shopping_alias_excludes_the_retired_searxng_shopping_engine():
+    """SearXNG's shopping category resolves to geizhals alone, which answers 403
+    behind a Cloudflare challenge that Crawl4AI's headless browser does not
+    clear either — so it occupied a slot in every shopping sweep and returned
+    nothing. It stays selectable via --engine for anyone geizhals answers."""
+    from monster_search.cli import ENGINE_CHOICES
+
+    assert "searxng_shopping" not in ENGINE_CATEGORIES["shopping"]
+    assert "searxng_shopping" in ENGINE_CHOICES
 
 
 def test_shopping_alias_dispatches_every_engine_it_lists(capsys):

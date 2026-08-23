@@ -405,21 +405,6 @@ def test_check_health_reports_unconfigured_engines_as_false():
 # searches while --health said nothing about them at all.
 # ---------------------------------------------------------------------------
 
-def test_probe_searxng_shopping_down_when_category_is_empty():
-    """SearXNG's shopping category resolves to a single engine, so one upstream
-    block empties it while general web search — and _probe_searxng — stay green.
-    That is precisely the gap this probe exists to close."""
-    from monster_search.health import _probe_searxng_shopping
-
-    with patch(
-        "monster_search.clients.shopping.ShoppingSearchClient.search",
-        return_value=[],
-    ):
-        ok, reason = _probe_searxng_shopping(Config())
-    assert ok is False
-    assert "no live engine" in reason
-
-
 def test_probe_priceghost_unconfigured_without_credentials():
     """Without credentials the client returns [] rather than raising, so an
     unconfigured PriceGhost sat in the shopping roster contributing nothing,

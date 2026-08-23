@@ -874,24 +874,6 @@ def _probe_synthesizer(config: Config) -> tuple[bool, str]:
     return True, f"llama-server serving {models[0].get('id', 'a model')}"
 
 
-def _probe_searxng_shopping(config: Config) -> tuple[bool, str]:
-    """Real SearXNG shopping-category query.
-
-    Worth its own probe: SearXNG's shopping category resolves to a single engine
-    (geizhals), so one upstream block empties the category while general web
-    search keeps working and _probe_searxng stays green.
-    """
-    try:
-        from monster_search.clients.shopping import ShoppingSearchClient
-
-        results = ShoppingSearchClient(config=config).search("laptop", max_results=1)
-    except Exception as exc:  # noqa: BLE001
-        return False, f"shopping query failed: {type(exc).__name__}: {exc}"[:200]
-    if not results:
-        return False, "0 results for 'laptop' — shopping category has no live engine"
-    return True, f"{len(results)} result(s)"
-
-
 def _probe_deals_rss(config: Config) -> tuple[bool, str]:
     """Fetch the deal RSS feeds and keyword-match.
 
@@ -962,7 +944,6 @@ def _probe_newegg(config: Config) -> tuple[bool, str]:
 _PROBES: dict[str, Callable[[Config], tuple[bool, str]]] = {
     "news": _probe_news,
     "synthesizer": _probe_synthesizer,
-    "searxng_shopping": _probe_searxng_shopping,
     "deals_rss": _probe_deals_rss,
     "priceghost": _probe_priceghost,
     "amazon_deals": _probe_amazon_deals,
