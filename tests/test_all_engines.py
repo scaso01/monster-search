@@ -438,7 +438,7 @@ def _patch_smart_search_engines(**overrides):
     patches = _patch_engines(**overrides)
     # Add shopping clients that appear in _make_engines but not _build_engines defaults
     shopping_clients = [
-        "ShoppingSearchClient", "SlickdealsClient",
+        "SlickdealsClient",
         "CheapSharkClient", "DealsRSSClient",
         "PriceGhostClient", "AmazonDealsClient", "NeweggClient",
         "MeilisearchClient", "LocalResearcherClient",
@@ -556,7 +556,7 @@ async def test_smart_search_academic_ss_included_when_key_set():
 
 
 _SHOPPING_ENGINES = (
-    "searxng_shopping", "slickdeals", "cheapshark", "deals_rss",
+    "slickdeals", "cheapshark", "deals_rss",
     "priceghost", "amazon_deals", "newegg",
 )
 

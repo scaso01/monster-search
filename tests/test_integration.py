@@ -150,12 +150,12 @@ def test_searxng_news_category(config):
 
 
 def test_searxng_shopping_category(config):
-    """The engine that `--engine shopping` used to skip over entirely.
+    """Retired from the shopping roster, still reachable via --engine.
 
-    Results depend on which shopping engines the SearXNG instance enables, and
-    many instances ship that category with none working, so an empty list is a
-    valid answer here. What is asserted is that the call succeeds and that any
-    results it does return are renderable.
+    SearXNG's shopping category resolves to a single engine (geizhals), so an
+    empty list is the expected answer wherever geizhals is blocked — which is
+    why this engine no longer sits in the default sweep. What is asserted is
+    that the call succeeds and that any results it does return are renderable.
     """
     import httpx as _httpx
 

@@ -48,7 +48,7 @@ ENGINE_CHOICES = [
     # Cache
     "meilisearch",
     # Shopping engines
-    "shopping", "cheapshark", "slickdeals", "deals",
+    "shopping", "searxng_shopping", "cheapshark", "slickdeals", "deals",
     "priceghost", "amazon_deals", "newegg",
     # Category aliases
     "academic", "security", "packages", "code", "whois", "video", "ai_ml",
@@ -63,12 +63,13 @@ ENGINE_CATEGORIES = {
     "ai_ml": ["huggingface"],
     "whois": ["whodat"],
     "video": ["youtube"],
-    # searxng_shopping belongs here: _run_one has always had a branch for it and
-    # the router's own SHOPPING category leads with it, but it was missing from
-    # this list, so `--engine shopping` silently skipped the SearXNG shopping
-    # category and that dispatch branch was unreachable.
+    # searxng_shopping is retired from this alias: SearXNG's shopping category
+    # resolves to geizhals alone, which answers 403 behind a Cloudflare
+    # challenge that even Crawl4AI's headless browser does not clear, so it
+    # contributed nothing but a slot. It stays in ENGINE_CHOICES for anyone
+    # geizhals does answer.
     "shopping": [
-        "searxng_shopping", "slickdeals", "cheapshark", "deals_rss",
+        "slickdeals", "cheapshark", "deals_rss",
         "priceghost", "amazon_deals", "newegg",
     ],
     "deals": ["slickdeals", "deals_rss", "amazon_deals"],

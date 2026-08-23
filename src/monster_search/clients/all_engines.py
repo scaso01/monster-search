@@ -35,7 +35,6 @@ from monster_search.clients.github_repos import GithubReposClient
 from monster_search.clients.hackernews import HackerNewsClient
 from monster_search.clients.huggingface import HuggingFaceClient
 from monster_search.clients.reddit import RedditClient
-from monster_search.clients.shopping import ShoppingSearchClient
 from monster_search.clients.cheapshark import CheapSharkClient
 from monster_search.clients.slickdeals import SlickdealsClient
 from monster_search.clients.deals_rss import DealsRSSClient
@@ -204,9 +203,6 @@ class AllEnginesClient:
             )
 
         if category == QueryCategory.SHOPPING:
-            engines["searxng_shopping"] = get_breaker("searxng_shopping").call(
-                ShoppingSearchClient(config=config).asearch(query, max_results=max_results)
-            )
             engines["slickdeals"] = get_breaker("slickdeals").call(
                 SlickdealsClient(config=config).asearch(query, max_results=max_results)
             )
@@ -490,9 +486,6 @@ class AllEnginesClient:
         # They return generic current deals regardless of the query, so running them
         # on every search put Slickdeals/Newegg/etc. into unrelated answers.
         if category == QueryCategory.SHOPPING:
-            engines["searxng_shopping"] = lambda: get_breaker("searxng_shopping").call(
-                ShoppingSearchClient(config=config).asearch(query, max_results=max_results)
-            )
             engines["slickdeals"] = lambda: get_breaker("slickdeals").call(
                 SlickdealsClient(config=config).asearch(query, max_results=max_results)
             )
