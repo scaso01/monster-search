@@ -53,6 +53,10 @@ from monster_search.models import SearchResult
 
 _URL_RE = _re.compile(r"^https?://", _re.IGNORECASE)
 
+# Ceiling on the Meilisearch cache write at the end of a search. The cache is a
+# nicety; a slow or unreachable Meilisearch must never extend a search.
+_CACHE_WRITE_TIMEOUT_S = 5.0
+
 # Preference order for which engine's synthesized answer leads the headline.
 # Perplexity/Vane/Khoj/Fyin/Local-Researcher produce better prose than the local
 # synthesizer; previously only the synthesizer's answer survived the tiered runner.
@@ -615,6 +619,18 @@ class AllEnginesClient:
         per_engine: dict[str, list[SearchResult]] = {
             name: st.pop("results", []) for name, st in engine_status.items()
         }
+
+        # Fill the Meilisearch cache. This was only ever wired into the legacy flat
+        # search(), so when smart mode became the default the index stopped being
+        # written and "meilisearch" spent every tier1 sweep querying an empty one.
+        # Awaited rather than fire-and-forget: ensure_future here races the end of
+        # the event loop. Bounded so an unreachable Meilisearch can't stall a search.
+        try:
+            await asyncio.wait_for(
+                self._cache_results(query, per_engine), timeout=_CACHE_WRITE_TIMEOUT_S,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            pass
 
         answer_text = _select_best_answer(answers)
         message = f"Smart search [{category.value}]: {len(all_results)} results"

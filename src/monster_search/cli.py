@@ -343,7 +343,12 @@ def main(argv: list[str] | None = None) -> None:
                 indicator = "DOWN"
             latency_s = rec["latency_ms"] / 1000.0
             line = f"  {name}: {indicator} ({latency_s:.2f}s)"
-            if indicator != "UP" and rec.get("reason"):
+            # Reasons print on UP lines too. A probe that ran a real query says
+            # what it got back ("5 result(s)", "162 cached document(s)"), which
+            # is the difference between "the port answered" and "the engine
+            # works" — the whole point of the probe. Liveness-only probes return
+            # an empty reason, so the line stays bare and that gap is visible.
+            if rec.get("reason"):
                 line += f" — {rec['reason']}"
             print(line)
         return

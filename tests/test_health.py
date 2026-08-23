@@ -318,6 +318,14 @@ def test_probe_perplexity_not_configured_when_no_auth_configured():
     assert "MONSTER_PERPLEXITY" in reason
 
 
+def _perplexity_returning(answer, results):
+    """Patch PerplexityClient.search so the probe never reaches the network."""
+    return patch(
+        "monster_search.clients.perplexity_client.PerplexityClient.search",
+        return_value=(answer, results),
+    )
+
+
 def test_probe_perplexity_up_with_browser_cookie_path():
     """Regression: the self-healing browser-cookie path must read UP. Previously
     the probe checked only the static token and falsely reported DOWN while the
@@ -325,10 +333,10 @@ def test_probe_perplexity_up_with_browser_cookie_path():
     with patch.dict(os.environ, {
         "MONSTER_PERPLEXITY_SESSION_TOKEN": "",
         "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "firefox",
-    }, clear=False):
+    }, clear=False), _perplexity_returning("an answer", ["r"]):
         ok, reason = _probe_perplexity(Config())
     assert ok is True
-    assert reason == ""
+    assert "1 result" in reason
 
 
 def test_probe_perplexity_up_with_static_token():
@@ -336,9 +344,36 @@ def test_probe_perplexity_up_with_static_token():
     with patch.dict(os.environ, {
         "MONSTER_PERPLEXITY_SESSION_TOKEN": "sometoken",
         "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "",
-    }, clear=False):
+    }, clear=False), _perplexity_returning("an answer", ["r"]):
         ok, reason = _probe_perplexity(Config())
     assert ok is True
+
+
+def test_probe_perplexity_down_when_configured_but_query_returns_nothing():
+    """Configured is not the same as working. An expired session token leaves the
+    config checks passing while the engine answers nothing — the case the old
+    config-only probe reported as UP in 0.00s."""
+    with patch.dict(os.environ, {
+        "MONSTER_PERPLEXITY_SESSION_TOKEN": "sometoken",
+        "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "",
+    }, clear=False), _perplexity_returning("", []):
+        ok, reason = _probe_perplexity(Config())
+    assert ok is False
+    assert "expired" in reason
+
+
+def test_probe_perplexity_down_when_query_raises():
+    """A live query that blows up reads DOWN rather than escaping the probe."""
+    with patch.dict(os.environ, {
+        "MONSTER_PERPLEXITY_SESSION_TOKEN": "sometoken",
+        "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER": "",
+    }, clear=False), patch(
+        "monster_search.clients.perplexity_client.PerplexityClient.search",
+        side_effect=RuntimeError("boom"),
+    ):
+        ok, reason = _probe_perplexity(Config())
+    assert ok is False
+    assert "RuntimeError" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +398,109 @@ def test_check_health_reports_unconfigured_engines_as_false():
         ok, _ = _probe_perplexity(Config())
     assert ok is not True
     assert bool(ok) is False
+
+
+# ---------------------------------------------------------------------------
+# Probes for engines that previously had none. Each of these ran in real
+# searches while --health said nothing about them at all.
+# ---------------------------------------------------------------------------
+
+def test_probe_searxng_shopping_down_when_category_is_empty():
+    """SearXNG's shopping category resolves to a single engine, so one upstream
+    block empties it while general web search — and _probe_searxng — stay green.
+    That is precisely the gap this probe exists to close."""
+    from monster_search.health import _probe_searxng_shopping
+
+    with patch(
+        "monster_search.clients.shopping.ShoppingSearchClient.search",
+        return_value=[],
+    ):
+        ok, reason = _probe_searxng_shopping(Config())
+    assert ok is False
+    assert "no live engine" in reason
+
+
+def test_probe_priceghost_unconfigured_without_credentials():
+    """Without credentials the client returns [] rather than raising, so an
+    unconfigured PriceGhost sat in the shopping roster contributing nothing,
+    silently. UNCONFIGURED is the honest answer — not DOWN, not UP."""
+    from monster_search.health import _probe_priceghost
+
+    with patch.dict(os.environ, {
+        "MONSTER_PRICEGHOST_EMAIL": "",
+        "MONSTER_PRICEGHOST_PASSWORD": "",
+    }, clear=False):
+        ok, reason = _probe_priceghost(Config())
+    assert ok is NOT_CONFIGURED
+    assert "PRICEGHOST" in reason
+
+
+def test_probe_priceghost_up_when_nothing_tracked_matches():
+    """PriceGhost tracks products rather than searching the web, so 0 matches is
+    a healthy answer and must not read as DOWN."""
+    from monster_search.health import _probe_priceghost
+
+    with patch.dict(os.environ, {
+        "MONSTER_PRICEGHOST_EMAIL": "a@b.c",
+        "MONSTER_PRICEGHOST_PASSWORD": "pw",
+    }, clear=False), patch(
+        "monster_search.clients.priceghost.PriceGhostClient.search",
+        return_value=[],
+    ):
+        ok, reason = _probe_priceghost(Config())
+    assert ok is True
+    assert "no tracked product" in reason
+
+
+@respx.mock
+def test_probe_synthesizer_down_when_no_model_loaded():
+    """llama-server answering is not the same as llama-server serving a model."""
+    from monster_search.health import _probe_synthesizer
+
+    config = Config()
+    respx.get(f"{config.llama_url}/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    ok, reason = _probe_synthesizer(config)
+    assert ok is False
+    assert "no model loaded" in reason
+
+
+@respx.mock
+def test_probe_meilisearch_reports_an_empty_cache():
+    """The reachability ping alone read UP for five months while the index held
+    zero documents, so every search queried an empty cache and got a clean,
+    silent 0. Empty is still UP (normal on a fresh install) but must be said."""
+    from monster_search.health import _probe_meilisearch
+
+    config = Config()
+    respx.get(f"{config.meilisearch_url}/health").mock(
+        return_value=httpx.Response(200, json={"status": "available"})
+    )
+    respx.get(f"{config.meilisearch_url}/stats").mock(
+        return_value=httpx.Response(
+            200, json={"indexes": {"search_results": {"numberOfDocuments": 0}}}
+        )
+    )
+    ok, reason = _probe_meilisearch(config)
+    assert ok is True
+    assert "empty" in reason
+
+
+@respx.mock
+def test_probe_marginalia_retries_before_reporting_down():
+    """Marginalia rate-limits by stalling rather than answering 429, and the
+    sweep's concurrency reliably tripped it — reporting DOWN for an engine that
+    answers in ~3s alone. One retry separates rate-limited from down."""
+    from monster_search.health import _probe_marginalia
+
+    config = Config()
+    route = respx.get(url__startswith=f"{config.marginalia_url}/public/search/")
+    route.side_effect = [
+        httpx.ReadTimeout("stalled"),
+        httpx.Response(200, json={"results": [{"url": "https://example.com"}]}),
+    ]
+    with patch("monster_search.health._MARGINALIA_RETRY_DELAY_S", 0):
+        ok, _reason = _probe_marginalia(config)
+    assert ok is True
+    assert route.call_count == 2
