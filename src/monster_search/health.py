@@ -11,9 +11,12 @@ that pattern produced false positives (broken engines) and false negatives
 Latency budget
 --------------
 All probes run in parallel via concurrent.futures.ThreadPoolExecutor.
-Slow engines (perplexity, vane, khoj, fyin) get startup/config checks only
-— issuing a real query would blow the 60s wall-clock budget.  These are
-documented explicitly in their probe docstrings.
+Only the genuinely slow engines get startup/config checks instead of a real
+query: vane and khoj (measured at 288s and 258s), fyin, and the synthesizer
+(121s).  Perplexity (~12s) and YouTube (~13s) fit the budget and now issue
+real queries — their config checks alone returned UP in 0.00s, which said
+nothing about the failure that actually happens to them (an expired session
+token, a blocked exit IP).  Each exception is documented in its own docstring.
 
 Health dict values
 ------------------
@@ -80,6 +83,11 @@ NOT_CONFIGURED = _NotConfigured()
 
 def _client(timeout: float = 10, **kwargs) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=True, **kwargs)
+
+
+# Pause before marginalia's second attempt — long enough to clear its rate-limit
+# window, short enough that a genuinely dead engine still fails inside the budget.
+_MARGINALIA_RETRY_DELAY_S = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -223,15 +231,33 @@ def _probe_khoj(config: Config) -> tuple[bool, str]:
 
 
 def _probe_meilisearch(config: Config) -> tuple[bool, str]:
-    """Health endpoint — Meilisearch is a result cache, not a search engine."""
+    """Health endpoint plus document count — Meilisearch is a cache, not an engine.
+
+    The reachability ping alone reported UP for five months while the index held
+    zero documents (the cache write had been orphaned by the smart-mode default),
+    so every search queried an empty cache and got a clean, silent 0. The count
+    makes that visible: reachable-but-empty is reported UP with the count in the
+    reason, because an empty cache is normal on a fresh install.
+    """
     try:
         with _client(timeout=5) as c:
             resp = c.get(f"{config.meilisearch_url}/health")
-        if resp.status_code == 200:
-            return True, ""
-        return False, f"HTTP {resp.status_code}"
+            if resp.status_code != 200:
+                return False, f"HTTP {resp.status_code}"
+            headers = (
+                {"Authorization": f"Bearer {config.meilisearch_key}"}
+                if config.meilisearch_key else None
+            )
+            stats = c.get(f"{config.meilisearch_url}/stats", headers=headers)
     except httpx.HTTPError as exc:
         return False, f"connection error: {exc}"
+    if stats.status_code != 200:
+        return True, f"reachable; stats unavailable (HTTP {stats.status_code})"
+    docs = sum(
+        idx.get("numberOfDocuments", 0)
+        for idx in stats.json().get("indexes", {}).values()
+    )
+    return True, "cache is empty (0 documents)" if not docs else f"{docs} cached document(s)"
 
 
 def _probe_perplexity(config: Config) -> tuple[bool, str]:
@@ -249,6 +275,11 @@ def _probe_perplexity(config: Config) -> tuple[bool, str]:
 
     NOTE: checking only the static token reported DOWN for users on the
     browser-cookie path (the engine actually works) — hence both are accepted.
+
+    Once configured, a real query follows. The config check alone returned UP in
+    0.00s while saying nothing about whether the session token had expired —
+    which it does roughly monthly, so the cheap check was UP precisely when the
+    engine was most likely to be broken. A measured query costs ~12s.
     """
     if not config.perplexity_session_token and not config.perplexity_cookies_from_browser:
         return NOT_CONFIGURED, (
@@ -257,7 +288,15 @@ def _probe_perplexity(config: Config) -> tuple[bool, str]:
         )
     if importlib.util.find_spec("curl_cffi") is None:
         return NOT_CONFIGURED, "curl_cffi not installed (pip install curl_cffi)"
-    return True, ""
+    try:
+        from monster_search.clients.perplexity_client import PerplexityClient
+
+        answer, results = PerplexityClient(config=config).search("tokio rust")
+    except Exception as exc:  # noqa: BLE001 — any failure means the engine is unusable
+        return False, f"live query failed: {type(exc).__name__}: {exc}"[:200]
+    if not answer and not results:
+        return False, "no answer and 0 results (session token likely expired)"
+    return True, f"{len(results)} result(s)"
 
 
 def _probe_arxiv(_config: Config) -> tuple[bool, str]:
@@ -405,21 +444,34 @@ def _probe_marginalia(config: Config) -> tuple[bool, str]:
     The old probe hit the root URL (/) which returns the docs page, not
     search results — causing a false negative when the real search API
     was healthy.
+
+    Marginalia rate-limits, and it stalls to a read timeout rather than
+    answering 429. Because the sweep fires 29 probes through a 12-worker pool,
+    this probe reliably landed inside its own rate-limit window and reported
+    DOWN for an engine that answers in ~3s when queried on its own. One retry
+    after a short pause distinguishes "rate-limited right now" from "down".
     """
-    try:
-        with _client(timeout=15) as c:
-            resp = c.get(
-                f"{config.marginalia_url}/public/search/{quote('tokio')}",
-                params={"count": "1"},
-            )
-        if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code}"
-        results = resp.json().get("results", [])
-        if not results:
-            return False, "0 results for probe query 'tokio'"
-        return True, ""
-    except httpx.HTTPError as exc:
-        return False, f"connection error: {exc}"
+    last = ""
+    for attempt in range(2):
+        if attempt:
+            time.sleep(_MARGINALIA_RETRY_DELAY_S)
+        try:
+            with _client(timeout=15) as c:
+                resp = c.get(
+                    f"{config.marginalia_url}/public/search/{quote('tokio')}",
+                    params={"count": "1"},
+                )
+            if resp.status_code != 200:
+                last = f"HTTP {resp.status_code}"
+                continue
+            results = resp.json().get("results", [])
+            if not results:
+                last = "0 results for probe query 'tokio'"
+                continue
+            return True, ""
+        except httpx.HTTPError as exc:
+            last = f"connection error: {exc}"
+    return False, f"{last} (after 2 attempts)"
 
 
 def _probe_mwmbl(config: Config) -> tuple[bool, str]:
@@ -500,18 +552,28 @@ def _probe_archive_org(config: Config) -> tuple[bool, str]:
     return True, ""
 
 
-def _probe_youtube(_config: Config) -> tuple[bool, str]:
-    """Import check for yt-dlp and youtube-transcript-api.
+def _probe_youtube(config: Config) -> tuple[bool, str]:
+    """Import check for yt-dlp and youtube-transcript-api, then a real search.
 
-    A real YouTube search requires network + yt-dlp subprocess and takes 5-10s.
-    Library availability is the gatekeeping check — if either import fails,
-    all YouTube searches will fail at runtime.
+    Library availability is the gatekeeping check — if either import fails, all
+    YouTube searches fail at runtime. But imports succeeding says nothing about
+    whether YouTube still serves this exit IP, which is the failure that
+    actually happens; the imports were UP while the engine could be blocked.
+    A measured search costs ~13s.
     """
     if importlib.util.find_spec("yt_dlp") is None:
         return NOT_CONFIGURED, "yt-dlp not installed"
     if importlib.util.find_spec("youtube_transcript_api") is None:
         return NOT_CONFIGURED, "youtube-transcript-api not installed"
-    return True, ""
+    try:
+        from monster_search.clients.youtube import YouTubeClient
+
+        results = YouTubeClient(config=config).search("python tutorial", max_results=1)
+    except Exception as exc:  # noqa: BLE001 — any failure means the engine is unusable
+        return False, f"live search failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 results for probe query 'python tutorial'"
+    return True, f"{len(results)} result(s)"
 
 
 def _probe_grepapp(_config: Config) -> tuple[bool, str]:
@@ -775,7 +837,136 @@ def _probe_searchcode_repo(_config: Config) -> tuple[bool, str]:
 # Registry: engine name → probe function
 # ---------------------------------------------------------------------------
 
+def _probe_news(config: Config) -> tuple[bool, str]:
+    """Real SearXNG news-category query. Separate from _probe_searxng because a
+    category has its own engine set and can be dead while general web is fine."""
+    try:
+        from monster_search.clients.news import NewsSearchClient
+
+        _answer, results = NewsSearchClient(config=config).search(
+            "technology", max_results=1,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"news query failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 results for probe query 'technology'"
+    return True, f"{len(results)} result(s)"
+
+
+def _probe_synthesizer(config: Config) -> tuple[bool, str]:
+    """llama-server reachability.
+
+    Deliberately not a real synthesis: a measured run took 121s, which would
+    dominate the whole sweep. The synthesizer is a SearXNG fetch plus one
+    llama-server call, and SearXNG has its own probe, so confirming a model is
+    loaded and serving covers the half not already covered.
+    """
+    try:
+        with _client(timeout=10) as c:
+            resp = c.get(f"{config.llama_url}/v1/models")
+    except httpx.HTTPError as exc:
+        return False, f"llama-server unreachable: {exc}"
+    if resp.status_code != 200:
+        return False, f"llama-server HTTP {resp.status_code}"
+    models = resp.json().get("data", [])
+    if not models:
+        return False, "llama-server has no model loaded"
+    return True, f"llama-server serving {models[0].get('id', 'a model')}"
+
+
+def _probe_searxng_shopping(config: Config) -> tuple[bool, str]:
+    """Real SearXNG shopping-category query.
+
+    Worth its own probe: SearXNG's shopping category resolves to a single engine
+    (geizhals), so one upstream block empties the category while general web
+    search keeps working and _probe_searxng stays green.
+    """
+    try:
+        from monster_search.clients.shopping import ShoppingSearchClient
+
+        results = ShoppingSearchClient(config=config).search("laptop", max_results=1)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"shopping query failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 results for 'laptop' — shopping category has no live engine"
+    return True, f"{len(results)} result(s)"
+
+
+def _probe_deals_rss(config: Config) -> tuple[bool, str]:
+    """Fetch the deal RSS feeds and keyword-match.
+
+    The probe term matters: this client filters entries by keyword, so an empty
+    query legitimately matches nothing and would read as DOWN.
+    """
+    try:
+        from monster_search.clients.deals_rss import DealsRSSClient
+
+        results = DealsRSSClient(config=config).search("laptop", max_results=1)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"deals RSS fetch failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 items matching 'laptop' across all deal feeds"
+    return True, f"{len(results)} item(s)"
+
+
+def _probe_priceghost(config: Config) -> tuple[bool, str]:
+    """Query the PriceGhost tracker.
+
+    Two things this catches that nothing else does. Without credentials the
+    client returns an empty list rather than raising, so an unconfigured
+    PriceGhost sits in the shopping roster contributing nothing, silently. And
+    because it tracks products rather than searching the web, 0 matches is a
+    legitimately healthy answer — reported in the reason, not as DOWN.
+    """
+    if not config.priceghost_email or not config.priceghost_password:
+        return NOT_CONFIGURED, "no MONSTER_PRICEGHOST_EMAIL / _PASSWORD set"
+    try:
+        from monster_search.clients.priceghost import PriceGhostClient
+
+        results = PriceGhostClient(config=config).search("laptop", max_results=1)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"priceghost query failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return True, "reachable; no tracked product matches 'laptop'"
+    return True, f"{len(results)} tracked product(s)"
+
+
+def _probe_amazon_deals(config: Config) -> tuple[bool, str]:
+    """Real Amazon deals query — this engine scrapes, so it fails by being
+    blocked, which only a real query surfaces."""
+    try:
+        from monster_search.clients.amazon_deals import AmazonDealsClient
+
+        results = AmazonDealsClient(config=config).search("laptop", max_results=1)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"amazon query failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 results for probe query 'laptop' (likely blocked)"
+    return True, f"{len(results)} result(s)"
+
+
+def _probe_newegg(config: Config) -> tuple[bool, str]:
+    """Real Newegg query — as with Amazon, a block is the failure mode that
+    matters and only a real query surfaces it."""
+    try:
+        from monster_search.clients.newegg import NeweggClient
+
+        results = NeweggClient(config=config).search("laptop", max_results=1)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"newegg query failed: {type(exc).__name__}: {exc}"[:200]
+    if not results:
+        return False, "0 results for probe query 'laptop' (likely blocked)"
+    return True, f"{len(results)} result(s)"
+
+
 _PROBES: dict[str, Callable[[Config], tuple[bool, str]]] = {
+    "news": _probe_news,
+    "synthesizer": _probe_synthesizer,
+    "searxng_shopping": _probe_searxng_shopping,
+    "deals_rss": _probe_deals_rss,
+    "priceghost": _probe_priceghost,
+    "amazon_deals": _probe_amazon_deals,
+    "newegg": _probe_newegg,
     "searxng": _probe_searxng,
     "local_researcher": _probe_local_researcher,
     "crawl4ai": _probe_crawl4ai,

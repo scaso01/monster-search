@@ -347,3 +347,79 @@ class TestEventStreaming:
             e.get("engine") == "local_researcher" and e.get("state") == "timeout"
             for e in events
         )
+
+
+class TestCategoryRoutedTier2:
+    """A category that merely routes to a tier2 engine must run that engine
+    ALONE. Sweeping the whole tier meant one cheap routed engine (ddg, in
+    GENERAL) pulled in vane and khoj — measured at 288s and 258s — so every
+    plain query paid minutes for engines nobody asked for."""
+
+    def test_routed_tier2_engine_runs_without_dragging_in_the_rest(self) -> None:
+        engines = {
+            "searxng": _make_engine([_make_result(f"r{i}") for i in range(5)]),
+            "ddg": _make_engine([_make_result("ddg-hit")]),
+            "vane": _make_engine([_make_result("vane-hit")]),
+            "khoj": _make_engine([_make_result("khoj-hit")]),
+        }
+        out, _answers, status = asyncio.run(
+            tiered_search("test", engines, category=QueryCategory.GENERAL)
+        )
+        titles = {r.title for r in out}
+        assert "ddg-hit" in titles
+        assert "vane-hit" not in titles
+        assert "khoj-hit" not in titles
+        assert status["ddg"]["state"] == "ok"
+        assert status["vane"]["state"] == "skipped"
+        assert status["khoj"]["state"] == "skipped"
+
+    def test_deep_still_sweeps_the_whole_tier2(self) -> None:
+        """include_slow must keep pulling in every tier2 engine — the fix above
+        narrows the routed path only, it does not disable the tier."""
+        engines = {
+            "searxng": _make_engine([_make_result(f"r{i}") for i in range(5)]),
+            "ddg": _make_engine([_make_result("ddg-hit")]),
+            "vane": _make_engine([_make_result("vane-hit")]),
+        }
+        out, _answers, _status = asyncio.run(
+            tiered_search(
+                "test", engines, category=QueryCategory.GENERAL, include_slow=True,
+            )
+        )
+        titles = {r.title for r in out}
+        assert {"ddg-hit", "vane-hit"} <= titles
+
+    def test_sparse_tier1_still_sweeps_the_whole_tier2(self) -> None:
+        """The <3-results promotion is independent of category routing."""
+        engines = {
+            "searxng": _make_engine([_make_result("only-one")]),
+            "ddg": _make_engine([_make_result("ddg-hit")]),
+            "vane": _make_engine([_make_result("vane-hit")]),
+        }
+        out, _answers, _status = asyncio.run(
+            tiered_search("test", engines, category=QueryCategory.GENERAL)
+        )
+        assert "vane-hit" in {r.title for r in out}
+
+
+class TestPerEngineTimeout:
+    """Before this, only tier3 was bounded — a hung tier1 or tier2 engine
+    blocked the whole search indefinitely."""
+
+    def test_slow_tier1_engine_times_out_without_losing_the_others(
+        self, monkeypatch,
+    ) -> None:
+        import monster_search._tiered as t
+        monkeypatch.setitem(t._TIER_ENGINE_TIMEOUT_S, "tier1", 0.05)
+
+        engines = {
+            "searxng": _make_engine([_make_result("fast")]),
+            "mwmbl": _slow_engine(5.0, [_make_result("never")]),
+        }
+        out, _answers, status = asyncio.run(tiered_search("test", engines))
+        titles = {r.title for r in out}
+        assert status["mwmbl"]["state"] == "timeout"
+        assert "never" not in titles
+        # The whole point of capping per-engine rather than per-tier:
+        # the engines that did finish still contribute.
+        assert "fast" in titles

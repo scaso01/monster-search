@@ -44,6 +44,14 @@ _DEEP_CATEGORIES = {QueryCategory.DEEP_RESEARCH}
 # only if a caller ever needs to tune it per-request.
 TIER3_TIMEOUT_S = 180.0
 
+# Per-engine ceiling for the fast/medium tiers. Applied per ENGINE rather than
+# per tier on purpose: an asyncio.wait_for around a whole tier (the tier3 shape
+# above) discards results from engines that already finished, which is fine for
+# tier3's single engine and destructive for tier1's twenty-eight.
+# Both sit above the measured worst cases (synthesizer 121s, vane 288s) so
+# nothing that currently works starts getting cut.
+_TIER_ENGINE_TIMEOUT_S: dict[str, float] = {"tier1": 180.0, "tier2": 300.0}
+
 # Event callback: called (awaited) with a JSON-serializable dict as engines
 # queue, start, and finish, so a UI can show live progress. Optional everywhere
 # (defaults to None) — when None the execution path is byte-for-byte the legacy
@@ -117,11 +125,19 @@ async def _run_tier(
             await on_event({"type": "engine", "engine": name, "state": "running", "tier": tier})
         # timed_call wraps each engine so we capture per-engine latency (even for
         # failures/timeouts) for the dashboard timing panel; it never raises.
-        res, exc, ms = await timed_call(engines[name]())
+        cap = _TIER_ENGINE_TIMEOUT_S.get(tier or "tier1")
+        call = engines[name]()
+        if cap is not None:
+            call = asyncio.wait_for(call, timeout=cap)
+        res, exc, ms = await timed_call(call)
         items: list[SearchResult] = []
         answer: str | None = None
         if exc is not None:
-            st: dict[str, Any] = {"state": "failed", "count": 0, "reason": failure_reason(exc), "ms": ms}
+            st: dict[str, Any]
+            if cap is not None and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                st = {"state": "timeout", "count": 0, "reason": f"exceeded {int(cap)}s cap", "ms": ms}
+            else:
+                st = {"state": "failed", "count": 0, "reason": failure_reason(exc), "ms": ms}
         elif isinstance(res, tuple):
             _msg, raw_items = res
             items = raw_items or []
@@ -213,10 +229,17 @@ async def tiered_search(
     # Cumulative deep: ``include_slow`` now pulls in the tier2 AI engines
     # (Vane/Khoj/Fyin) too, not just tier3 — previously deep skipped tier2
     # unless tier1 came back nearly empty.
-    run_tier2 = include_slow or len(tier1_results) < 3 or bool(category_extras_t2)
+    sweep_tier2 = include_slow or len(tier1_results) < 3
+    run_tier2 = sweep_tier2 or bool(category_extras_t2)
     if run_tier2:
-        # Combine standard tier2 + category extras (dedup)
-        t2_to_run = list(dict.fromkeys(tier2_engines + category_extras_t2))
+        # A category that merely ROUTES to a tier2 engine gets that engine only.
+        # Sweeping the whole tier here meant one cheap routed engine (ddg, ~3s,
+        # in GENERAL) dragged in vane and khoj — measured at 288s and 258s — so
+        # every plain query paid 4-7 minutes for engines nobody asked for.
+        if sweep_tier2:
+            t2_to_run = list(dict.fromkeys(tier2_engines + category_extras_t2))
+        else:
+            t2_to_run = list(dict.fromkeys(category_extras_t2))
         t2_to_run = [e for e in t2_to_run if e not in ran]
         if t2_to_run:
             await _emit_tier("tier2")
