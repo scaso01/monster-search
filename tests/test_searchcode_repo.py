@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import respx
 import httpx
+from unittest.mock import patch
 
 from monster_search.clients.searchcode_repo import SearchcodeRepoClient
 from monster_search.config import Config
@@ -177,3 +178,42 @@ def test_searchcode_repo_snippet_content():
     results = client.search("import httpx", repository=_REPO_URL, max_results=10)
     assert results[0].snippet == "import httpx"
     assert results[1].snippet == "client = httpx.Client()"
+
+
+@respx.mock
+def test_search_retries_when_clone_queue_is_full():
+    """searchcode clones the repo server-side and its clone queue is shared with
+    every other user. A full queue is a busy signal that clears in seconds, so a
+    real search should ride it out rather than failing the user's query."""
+    from monster_search.clients.searchcode_repo import SearchcodeRepoClient
+
+    route = respx.post("https://api.searchcode.com/api/v1/code_search")
+    route.side_effect = [
+        httpx.Response(503, json={"error": {"code": "clone_queue_full"}}),
+        httpx.Response(200, json={"results": [{
+            "location": "src/lib.rs", "repo": "tokio", "language": "Rust",
+            "matches": [{"line": 1, "line_content": "use tokio;"}],
+        }]}),
+    ]
+    with patch("monster_search.clients.searchcode_repo._CLONE_QUEUE_RETRY_DELAY_S", 0):
+        results = SearchcodeRepoClient().search(
+            "tokio", repository="https://github.com/tokio-rs/tokio", max_results=1
+        )
+    assert len(results) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_search_raises_when_clone_queue_never_clears():
+    """A queue that stays full is a real failure — surface it, don't fake a hit."""
+    from monster_search.clients.searchcode_repo import SearchcodeRepoClient
+
+    route = respx.post("https://api.searchcode.com/api/v1/code_search").mock(
+        return_value=httpx.Response(503, json={"error": {"code": "clone_queue_full"}})
+    )
+    with patch("monster_search.clients.searchcode_repo._CLONE_QUEUE_RETRY_DELAY_S", 0):
+        with pytest.raises(httpx.HTTPStatusError):
+            SearchcodeRepoClient().search(
+                "tokio", repository="https://github.com/tokio-rs/tokio"
+            )
+    assert route.call_count == 2

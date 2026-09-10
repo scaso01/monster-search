@@ -54,6 +54,8 @@ from urllib.parse import quote
 
 import httpx
 
+from monster_search._proxy import get_with_failover
+from monster_search.clients.searchcode_repo import _is_clone_queue_full
 from monster_search.clients.archive_org import (
     _advanced_search_url,
     _build_advanced_ssh_command,
@@ -88,6 +90,11 @@ def _client(timeout: float = 10, **kwargs) -> httpx.Client:
 # Pause before marginalia's second attempt — long enough to clear its rate-limit
 # window, short enough that a genuinely dead engine still fails inside the budget.
 _MARGINALIA_RETRY_DELAY_S = 3.0
+
+# Pause before searchcode's second attempt. Upstream advises 30s, which would
+# blow the sweep budget; measured spacing of ~1s already clears the queue in
+# practice, so 3s matches marginalia and stays inside the per-engine cap.
+_SEARCHCODE_RETRY_DELAY_S = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -344,14 +351,20 @@ def _probe_semantic_scholar(_config: Config) -> tuple[bool, str]:
         return False, f"connection error: {exc}"
 
 
-def _probe_openalex(_config: Config) -> tuple[bool, str]:
-    """Query OpenAlex for 'transformer' and require ≥1 result."""
+def _probe_openalex(config: Config) -> tuple[bool, str]:
+    """Query OpenAlex for 'transformer' and require ≥1 result.
+
+    Routed through the same exit failover the client uses: OpenAlex meters per
+    IP, so a probe on the shared exit reports DOWN for an engine that answers
+    fine through Oracle.
+    """
     try:
-        with _client(timeout=12) as c:
-            resp = c.get(
-                "https://api.openalex.org/works",
-                params={"search": "transformer", "per_page": "1"},
-            )
+        resp = get_with_failover(
+            config,
+            "https://api.openalex.org/works",
+            params={"search": "transformer", "per_page": "1"},
+            timeout=12,
+        )
         if resp.status_code != 200:
             return False, f"HTTP {resp.status_code}"
         results = resp.json().get("results", [])
@@ -812,25 +825,38 @@ def _probe_searchcode_repo(_config: Config) -> tuple[bool, str]:
     'import httpx' occurrences.  The probe does not use a real git URL for
     privacy reasons; searchcode normalises the repo field to just the owner/name
     portion, so we pass the canonical HTTPS clone URL.
+
+    Passing `repository` makes searchcode clone the repo server-side, and that
+    clone queue is shared across all of its users. When it is full the API
+    answers 503 `clone_queue_full` in ~350ms — a busy signal, not an outage, and
+    the engine answers normally moments later. Retry once, as marginalia does.
     """
-    try:
-        with _client(timeout=12) as c:
-            resp = c.post(
-                "https://api.searchcode.com/api/v1/code_search",
-                params={"client": "monster-search"},
-                json={
-                    "repository": "https://github.com/encode/httpx",
-                    "query": "import httpx",
-                },
-            )
-        if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code}"
-        results = resp.json().get("results", [])
-        if not results:
-            return False, "0 results for probe query 'import httpx' in encode/httpx"
-        return True, ""
-    except httpx.HTTPError as exc:
-        return False, f"connection error: {exc}"
+    last = ""
+    for attempt in range(2):
+        if attempt:
+            time.sleep(_SEARCHCODE_RETRY_DELAY_S)
+        try:
+            with _client(timeout=12) as c:
+                resp = c.post(
+                    "https://api.searchcode.com/api/v1/code_search",
+                    params={"client": "monster-search"},
+                    json={
+                        "repository": "https://github.com/encode/httpx",
+                        "query": "import httpx",
+                    },
+                )
+            if _is_clone_queue_full(resp):
+                last = "clone queue full upstream"
+                continue
+            if resp.status_code != 200:
+                return False, f"HTTP {resp.status_code}"
+            results = resp.json().get("results", [])
+            if not results:
+                return False, "0 results for probe query 'import httpx' in encode/httpx"
+            return True, ""
+        except httpx.HTTPError as exc:
+            return False, f"connection error: {exc}"
+    return False, f"{last} (after 2 attempts)"
 
 
 # ---------------------------------------------------------------------------

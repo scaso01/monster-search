@@ -489,3 +489,63 @@ def test_probe_marginalia_retries_before_reporting_down():
         ok, _reason = _probe_marginalia(config)
     assert ok is True
     assert route.call_count == 2
+
+
+_CLONE_QUEUE_FULL = {
+    "error": {
+        "code": "clone_queue_full",
+        "message": "Server is busy cloning other repositories. Please retry in 30 seconds.",
+    }
+}
+
+
+@respx.mock
+def test_probe_searchcode_retries_on_clone_queue_full():
+    """Passing `repository` makes searchcode clone server-side, and its shared
+    clone queue answers 503 in ~350ms when full. That is a busy signal, not an
+    outage — one retry separates the two."""
+    from monster_search.health import _probe_searchcode_repo
+
+    route = respx.post("https://api.searchcode.com/api/v1/code_search")
+    route.side_effect = [
+        httpx.Response(503, json=_CLONE_QUEUE_FULL),
+        httpx.Response(200, json={"results": [{"file": "httpx/_utils.py"}]}),
+    ]
+    with patch("monster_search.health._SEARCHCODE_RETRY_DELAY_S", 0):
+        ok, reason = _probe_searchcode_repo(Config())
+    assert ok is True
+    assert reason == ""
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_probe_searchcode_reports_down_when_queue_stays_full():
+    """A busy queue that never clears is still a failure — don't paper over it."""
+    from monster_search.health import _probe_searchcode_repo
+
+    route = respx.post("https://api.searchcode.com/api/v1/code_search")
+    route.side_effect = [
+        httpx.Response(503, json=_CLONE_QUEUE_FULL),
+        httpx.Response(503, json=_CLONE_QUEUE_FULL),
+    ]
+    with patch("monster_search.health._SEARCHCODE_RETRY_DELAY_S", 0):
+        ok, reason = _probe_searchcode_repo(Config())
+    assert ok is False
+    assert "clone queue full" in reason
+    assert "after 2 attempts" in reason
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_probe_searchcode_does_not_retry_other_errors():
+    """Only the clone-queue busy signal earns a retry; a real 503 or a 500 is
+    reported immediately rather than doubling the load on a struggling API."""
+    from monster_search.health import _probe_searchcode_repo
+
+    route = respx.post("https://api.searchcode.com/api/v1/code_search")
+    route.mock(return_value=httpx.Response(503, json={"error": {"code": "overloaded"}}))
+    with patch("monster_search.health._SEARCHCODE_RETRY_DELAY_S", 0):
+        ok, reason = _probe_searchcode_repo(Config())
+    assert ok is False
+    assert reason == "HTTP 503"
+    assert route.call_count == 1

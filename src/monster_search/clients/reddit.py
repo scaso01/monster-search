@@ -16,8 +16,8 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 
-import httpx
 
+from monster_search._proxy import aget_with_failover, get_with_failover
 from monster_search.config import Config
 from monster_search.models import SearchResult
 
@@ -119,30 +119,26 @@ class RedditClient:
         """Synchronous search via Reddit RSS feed."""
         max_results = max_results or self._config.max_results
         timeout = self._config.reddit_timeout
-        with httpx.Client(
-            timeout=timeout,
+        resp = get_with_failover(
+            self._config,
+            f"{_BASE_URL}/search.rss",
+            params={"q": query, "limit": max_results, "sort": "relevance", "type": "link"},
             headers={"User-Agent": _USER_AGENT},
-            follow_redirects=True,
-        ) as client:
-            resp = client.get(
-                f"{_BASE_URL}/search.rss",
-                params={"q": query, "limit": max_results, "sort": "relevance", "type": "link"},
-            )
-            resp.raise_for_status()
-            return self._parse_feed(resp.text, max_results)
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return self._parse_feed(resp.text, max_results)
 
     async def asearch(self, query: str, *, max_results: int | None = None) -> list[SearchResult]:
         """Async search via Reddit RSS feed."""
         max_results = max_results or self._config.max_results
         timeout = self._config.reddit_timeout
-        async with httpx.AsyncClient(
-            timeout=timeout,
+        resp = await aget_with_failover(
+            self._config,
+            f"{_BASE_URL}/search.rss",
+            params={"q": query, "limit": max_results, "sort": "relevance", "type": "link"},
             headers={"User-Agent": _USER_AGENT},
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(
-                f"{_BASE_URL}/search.rss",
-                params={"q": query, "limit": max_results, "sort": "relevance", "type": "link"},
-            )
-            resp.raise_for_status()
-            return self._parse_feed(resp.text, max_results)
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return self._parse_feed(resp.text, max_results)

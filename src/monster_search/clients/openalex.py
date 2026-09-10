@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from monster_search.clients._pool import get_async_client, get_client
+from monster_search._proxy import aget_with_failover, get_with_failover
 from monster_search.config import Config
 from monster_search.models import SearchResult
 
@@ -71,8 +71,10 @@ class OpenAlexClient:
         }
         if self._config.openalex_mailto:
             params["mailto"] = self._config.openalex_mailto
-        client = get_client(_BASE_URL, self._config.openalex_timeout)
-        resp = client.get(_BASE_URL, params=params)
+        resp = get_with_failover(
+            self._config, _BASE_URL, params=params,
+            timeout=self._config.openalex_timeout,
+        )
         resp.raise_for_status()
         return self._parse_results(resp.json(), max_results)
 
@@ -91,7 +93,9 @@ class OpenAlexClient:
         }
         if self._config.openalex_mailto:
             params["mailto"] = self._config.openalex_mailto
-        client = get_async_client(_BASE_URL, self._config.openalex_timeout)
-        resp = await client.get(_BASE_URL, params=params)
+        resp = await aget_with_failover(
+            self._config, _BASE_URL, params=params,
+            timeout=self._config.openalex_timeout,
+        )
         resp.raise_for_status()
         return self._parse_results(resp.json(), max_results)
