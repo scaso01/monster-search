@@ -22,6 +22,9 @@ or any default tier.  Requires --repo <git-url> on the CLI.
 from __future__ import annotations
 
 
+import asyncio
+import time
+
 import httpx
 
 from monster_search.config import Config
@@ -92,6 +95,23 @@ def _parse_results(data: dict, max_results: int, repo_url: str) -> list[SearchRe
     return out[:max_results]
 
 
+# Passing `repository` makes searchcode clone the repo server-side, and that
+# clone queue is shared across all of its users. A full queue answers 503
+# `clone_queue_full` in ~350ms and clears within seconds, so one retry turns an
+# intermittent hard failure into a slightly slower success.
+_CLONE_QUEUE_RETRY_DELAY_S = 3.0
+
+
+def _is_clone_queue_full(resp: httpx.Response) -> bool:
+    """True when a searchcode 503 is the shared-clone-queue busy signal."""
+    if resp.status_code != 503:
+        return False
+    try:
+        return resp.json().get("error", {}).get("code") == "clone_queue_full"
+    except ValueError:
+        return False
+
+
 class SearchcodeRepoClient:
     """Search code within a specific repository via searchcode.com API."""
 
@@ -115,12 +135,12 @@ class SearchcodeRepoClient:
         max_results = max_results or self._config.max_results
         timeout = self._config.searchcode_timeout
 
+        body = {"repository": repository, "query": query}
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.post(
-                _API_URL,
-                params={"client": _CLIENT_TAG},
-                json={"repository": repository, "query": query},
-            )
+            resp = client.post(_API_URL, params={"client": _CLIENT_TAG}, json=body)
+            if _is_clone_queue_full(resp):
+                time.sleep(_CLONE_QUEUE_RETRY_DELAY_S)
+                resp = client.post(_API_URL, params={"client": _CLIENT_TAG}, json=body)
         resp.raise_for_status()
         return _parse_results(resp.json(), max_results, repository)
 
@@ -135,11 +155,13 @@ class SearchcodeRepoClient:
         max_results = max_results or self._config.max_results
         timeout = self._config.searchcode_timeout
 
+        body = {"repository": repository, "query": query}
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.post(
-                _API_URL,
-                params={"client": _CLIENT_TAG},
-                json={"repository": repository, "query": query},
-            )
+            resp = await client.post(_API_URL, params={"client": _CLIENT_TAG}, json=body)
+            if _is_clone_queue_full(resp):
+                await asyncio.sleep(_CLONE_QUEUE_RETRY_DELAY_S)
+                resp = await client.post(
+                    _API_URL, params={"client": _CLIENT_TAG}, json=body
+                )
         resp.raise_for_status()
         return _parse_results(resp.json(), max_results, repository)

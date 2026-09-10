@@ -127,6 +127,21 @@ class Config:
         default_factory=lambda: int(os.environ.get("MONSTER_ARXIV_TIMEOUT", "15"))
     )
 
+    # Comma-separated SOCKS5 exits, tried in order before falling back to
+    # direct egress. See _proxy.py — OpenAlex and Reddit both meter per IP, so
+    # a shared VPN exit gets exhausted by strangers before your query arrives.
+    #
+    # Empty by default: a fresh clone must not pay a connect timeout against
+    # somebody else's LAN address on every academic and community search. Set
+    # it only if you actually have dedicated exits.
+    socks_proxies: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            p.strip()
+            for p in os.environ.get("MONSTER_SOCKS_PROXIES", "").split(",")
+            if p.strip()
+        )
+    )
+
     # Academic — OpenAlex
     openalex_timeout: int = field(
         default_factory=lambda: int(os.environ.get("MONSTER_OPENALEX_TIMEOUT", "15"))
