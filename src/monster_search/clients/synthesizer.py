@@ -43,6 +43,21 @@ _DEEP_SCRAPE_COUNT = 3
 _SEARCH_RETRIES = 3
 _RETRY_BACKOFF_S = 1.5
 
+# A well-behaved local LLM either synthesizes an answer or says it lacks enough
+# information (system prompt rule 4). Short replies matching these phrases are
+# not synthesis at all — they are an upstream auth/quota wall (e.g. a rogue
+# OpenAI-compatible URL pointing at a hosted provider) leaking its "not
+# authenticated" text through as if it were an answer. Gate on message length
+# too so a legitimate long answer that happens to mention e.g. "sign up" isn't
+# misflagged.
+_AUTH_WALL_PATTERNS = (
+    "sign up", "log in to continue", "log in and", "please log in",
+    "rate limit", "quota exceeded", "quota has been exceeded",
+    "authentication required", "not authenticated", "subscribe to continue",
+    "upgrade your plan", "api key is missing", "invalid api key",
+)
+_AUTH_WALL_MAX_LEN = 120
+
 
 def _format_sources(results: list[SearchResult], *, deep_content: dict[str, str] | None = None) -> str:
     """Format search results as numbered source entries for the LLM prompt."""
@@ -121,7 +136,14 @@ class SynthesizerClient:
         choices = data.get("choices", [])
         if not choices:
             raise RuntimeError("llama-server returned no choices")
-        return choices[0].get("message", {}).get("content", "")
+        content = choices[0].get("message", {}).get("content", "")
+        stripped = content.strip().lower()
+        if len(stripped) <= _AUTH_WALL_MAX_LEN and any(p in stripped for p in _AUTH_WALL_PATTERNS):
+            raise RuntimeError(
+                f"synthesizer LLM endpoint returned an auth/quota-wall response instead "
+                f"of a synthesis: {content!r}"
+            )
+        return content
 
     def _scrape_pages_sync(self, urls: list[str]) -> dict[str, str]:
         """Scrape multiple pages in parallel using ThreadPoolExecutor."""
