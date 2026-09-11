@@ -280,6 +280,35 @@ class TestSynthesizerSync:
             client.search("query")
 
     @respx.mock
+    def test_llm_auth_wall_response_raises(self):
+        """An upstream auth/quota-wall reply must raise, never pass as a synthesis."""
+        respx.get("http://localhost:8080/search").mock(
+            return_value=httpx.Response(200, json=MOCK_SEARXNG_RESPONSE)
+        )
+        respx.post("http://localhost:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "Sign up and repeat your request."}}]},
+            )
+        )
+        client = SynthesizerClient()
+        with pytest.raises(RuntimeError, match="auth/quota-wall"):
+            client.search("query")
+
+    @respx.mock
+    def test_legitimate_no_info_answer_does_not_raise(self):
+        """The system prompt's own 'not enough information' refusal must survive the guard."""
+        respx.get("http://localhost:8080/search").mock(
+            return_value=httpx.Response(200, json=MOCK_SEARXNG_RESPONSE)
+        )
+        respx.post("http://localhost:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=MOCK_LLM_NO_CITATIONS)
+        )
+        client = SynthesizerClient()
+        message, _ = client.search("query")
+        assert "cannot find" in message.lower()
+
+    @respx.mock
     def test_max_sources_limits_searxng(self):
         """max_sources parameter limits the SearXNG query."""
         call_params = {}
