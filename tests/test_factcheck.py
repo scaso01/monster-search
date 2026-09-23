@@ -23,6 +23,19 @@ def _no_dotenv(monkeypatch):
     monkeypatch.setattr("monster_search.cli.load_dotenv", lambda *a, **kw: False)
 
 
+RATINGS = {
+    "reliable.com": {"rating": "reliable", "why": "Wikipedia RSP: reliable"},
+    "reliable2.com": {"rating": "reliable", "why": "Wikipedia RSP: reliable"},
+    "tabloid.com": {"rating": "unreliable", "why": "Wikipedia RSP: unreliable"},
+    "fake.com": {"rating": "low-credibility", "why": "Iffy.news"},
+}
+
+
+@pytest.fixture(autouse=True)
+def _ratings(monkeypatch):
+    monkeypatch.setattr(fc.reliability, "load", lambda: (RATINGS, {"status": "ok", "domains": len(RATINGS)}))
+
+
 def _r(url: str, title: str = "t", snippet: str = "snippet text") -> SearchResult:
     return SearchResult(title=title, url=url, snippet=snippet, source="x")
 
@@ -273,9 +286,104 @@ def _evidence(*sources) -> dict:
         "evidence_id": "ev1",
         "claim": "Spotify launched in the US in July 2011",
         "engines": {},
-        "sources": [{"n": i, "url": url, "domain": fc.domain_of(url), "text": text}
+        "sources": [{"n": i, "url": url, "domain": fc.domain_of(url), "text": text,
+                     "reliability": fc.reliability.rate(url, RATINGS)}
                     for i, (url, text) in enumerate(sources, start=1)],
     }
+
+
+Q_A = "launched in the United States in July 2011"
+Q_B = "reached American listeners in July 2011"
+Q_C = "first launched in the United States in 2009"
+
+
+def _four(first, second, third, fourth):
+    return _evidence((first, TEXT_A), (second, TEXT_B), (third, TEXT_A), (fourth, TEXT_C))
+
+
+def test_three_to_one_with_a_reliable_supporter_is_true():
+    ev = _four("https://reliable.com/1", "https://b.org/2", "https://c.net/3", "https://tabloid.com/4")
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B), (3, "supports", Q_A), (4, "refutes", Q_C)))
+    assert out["verdict"] == "TRUE"
+    assert "1 dissent (tabloid.com, rated unreliable)" in out["reason"]
+
+
+def test_three_to_one_mirrors_to_false():
+    ev = _four("https://tabloid.com/1", "https://reliable.com/2", "https://b.org/3", "https://c.net/4")
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "refutes", Q_B), (3, "refutes", Q_A), (4, "refutes", Q_C)))
+    assert out["verdict"] == "FALSE"
+
+
+def test_three_to_one_without_a_reliable_anchor_stays_inconclusive():
+    ev = _four("https://a.com/1", "https://b.org/2", "https://c.net/3", "https://tabloid.com/4")
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B), (3, "supports", Q_A), (4, "refutes", Q_C)))
+    assert out["verdict"] == "INCONCLUSIVE"
+
+
+def test_a_reliable_dissenter_blocks_the_majority():
+    ev = _four("https://reliable.com/1", "https://b.org/2", "https://c.net/3", "https://reliable2.com/4")
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B), (3, "supports", Q_A), (4, "refutes", Q_C)))
+    assert out["verdict"] == "INCONCLUSIVE"
+    assert out["reason"] == "sources conflict"
+
+
+def test_two_to_one_is_not_enough_for_a_majority():
+    ev = _evidence(("https://reliable.com/1", TEXT_A), ("https://b.org/2", TEXT_B), ("https://tabloid.com/3", TEXT_C))
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B), (3, "refutes", Q_C)))
+    assert out["verdict"] == "INCONCLUSIVE"
+
+
+def test_social_posts_and_low_credibility_sites_do_not_vote():
+    ev = _evidence(("https://a.com/1", TEXT_A), ("https://b.org/2", TEXT_B),
+                   ("https://www.instagram.com/p/x", TEXT_C), ("https://fake.com/4", TEXT_C))
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B), (3, "refutes", Q_C), (4, "refutes", Q_C)))
+    assert out["verdict"] == "TRUE"
+    assert "(2 low-reliability quote(s) not counted)" in out["reason"]
+    assert [e["counted"] for e in out["refuting"]] == [False, False]
+    assert out["refuting"][0]["reliability"] == "user-generated"
+
+
+def test_low_credibility_sites_alone_cannot_make_a_verdict():
+    ev = _evidence(("https://fake.com/1", TEXT_A), ("https://www.facebook.com/2", TEXT_B))
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B)))
+    assert out["verdict"] == "INCONCLUSIVE"
+    assert out["reason"].startswith("no verified evidence either way")
+
+
+def test_evidence_without_ratings_is_treated_as_unrated():
+    ev = _evidence(("https://a.com/1", TEXT_A), ("https://b.org/2", TEXT_B))
+    for src in ev["sources"]:
+        del src["reliability"]
+    assert fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B)))["verdict"] == "TRUE"
+
+
+def test_sites_that_cannot_vote_only_fill_leftover_slots(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://www.instagram.com/p/1"), _r("https://fake.com/2"), _r("https://a.com/3")],
+             searxng=[_r("https://www.facebook.com/4"), _r("https://b.com/5")])
+    ev = fc.gather("claim", Config(), fetch_pages=False, max_sources=3)
+    assert {s["domain"] for s in ev["sources"][:2]} == {"a.com", "b.com"}
+
+
+def test_fallbacks_run_when_only_non_voting_sites_are_found(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://www.instagram.com/p/1"), _r("https://x.com/a/2")],
+             brave=[_r("https://a.com/1"), _r("https://b.com/2")])
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert ev["engines"]["brave"] == {"status": "ok", "count": 2}
+    assert [s["domain"] for s in ev["sources"]][:2] == ["a.com", "b.com"]
+
+
+def test_gather_rates_sources_and_survives_missing_lists(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://reliable.com/1"), _r("https://x.com/a/status/1")])
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert [s["reliability"]["rating"] for s in ev["sources"]] == ["reliable", "user-generated"]
+    assert ev["reliability"]["status"] == "ok"
+
+    def down():
+        raise fc.reliability.ReliabilityUnavailable("offline")
+    monkeypatch.setattr(fc.reliability, "load", down)
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert ev["reliability"] == {"status": "error", "error": "offline"}
+    assert ev["sources"][0]["reliability"]["rating"] == "unrated"
 
 
 def _labels(*labels) -> dict:

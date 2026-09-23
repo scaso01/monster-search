@@ -25,6 +25,7 @@ from monster_search.clients.brave_html import BraveHtmlClient
 from monster_search.clients.crawl4ai_client import Crawl4AIClient
 from monster_search.clients.ddg_browser import DdgBrowserClient
 from monster_search.clients.gnews import GNewsClient
+from monster_search.clients import reliability
 from monster_search.clients.perplexity_client import PerplexityClient
 from monster_search.clients.searxng import SearXNGClient
 from monster_search.config import Config
@@ -41,7 +42,7 @@ HOAX_TEMPLATE_DOMAINS = ("mediamass.net",)
 DEFAULT_MAX_SOURCES = 6
 # The fallbacks are scarce: Brave blocks an exit for ~36 min, sometimes after one
 # query, and Perplexity runs on a free account's quota. They are spent only when the
-# core engines leave the claim with fewer usable sources than this.
+# core engines leave the claim with fewer sources that can vote than this.
 FALLBACK_BELOW = 2
 MAX_TEXT_CHARS = 20_000
 EXCERPT_CHARS = 500
@@ -165,7 +166,13 @@ def _run_fallbacks(claim: str, config: Config, per_engine: int, found: list) -> 
     return status
 
 
-def _rank(found: list[tuple[str, list[SearchResult]]], max_sources: int) -> tuple[list[dict], list[dict]]:
+def _counts(src: dict) -> bool:
+    return src["reliability"]["rating"] not in reliability.NOT_COUNTED
+
+
+def _rank(
+    found: list[tuple[str, list[SearchResult]]], max_sources: int, ratings: dict[str, dict]
+) -> tuple[list[dict], list[dict]]:
     merged: dict[str, dict] = {}
     excluded: dict[str, str] = {}
     for engine_idx, (engine, results) in enumerate(found):
@@ -185,14 +192,16 @@ def _rank(found: list[tuple[str, list[SearchResult]]], max_sources: int) -> tupl
                     "domain": domain_of(r.url),
                     "snippet": html.unescape(r.snippet or ""),
                     "found_by": [engine],
+                    "reliability": reliability.rate(r.url, ratings),
                     "_order": (rank, engine_idx),
                 }
             elif engine not in entry["found_by"]:
                 entry["found_by"].append(engine)
                 entry["_order"] = min(entry["_order"], (rank, engine_idx))
-    # Multi-engine hits first, then alternate engines by rank so one engine's
-    # long tail cannot crowd out another engine's top result.
-    ranked = sorted(merged.values(), key=lambda e: (-len(e["found_by"]), e["_order"]))
+    # Sites that cannot vote (social posts, fact-failing sites) only fill leftover
+    # slots. Then multi-engine hits first, then alternate engines by rank so one
+    # engine's long tail cannot crowd out another engine's top result.
+    ranked = sorted(merged.values(), key=lambda e: (not _counts(e), -len(e["found_by"]), e["_order"]))
     for e in ranked:
         del e["_order"]
     return ranked[:max_sources], [{"url": u, "why": w} for u, w in sorted(excluded.items())]
@@ -259,12 +268,19 @@ def gather(
     if not claim:
         raise ValueError("claim is empty")
 
+    try:
+        ratings, rating_status = reliability.load()
+    except reliability.ReliabilityUnavailable as exc:
+        # Every source then reads "unrated": votes still count, but no majority
+        # verdict can fire because none has a reliable anchor.
+        ratings, rating_status = {}, {"status": "error", "error": str(exc)}
+
     per_engine = max(5, max_sources)
     found, engines = _run_engines(claim, config, per_engine)
-    sources, excluded = _rank(found, max_sources)
-    if len(sources) < FALLBACK_BELOW:
+    sources, excluded = _rank(found, max_sources, ratings)
+    if sum(map(_counts, sources)) < FALLBACK_BELOW:
         engines.update(_run_fallbacks(claim, config, per_engine, found))
-        sources, excluded = _rank(found, max_sources)
+        sources, excluded = _rank(found, max_sources, ratings)
     else:
         engines.update({name: {"status": "not needed"} for name in _FALLBACKS})
     if not sources:
@@ -296,6 +312,7 @@ def gather(
         "claim": claim,
         "created": created,
         "engines": engines,
+        "reliability": rating_status,
         "excluded": excluded,
         "sources": sources,
     }
@@ -344,11 +361,27 @@ def quote_in_text(quote: str, text: str) -> bool:
     return True
 
 
+def _votes(entries: list[dict]) -> dict[str, str]:
+    """{domain: rating} for counted entries; one vote per domain."""
+    return {e["domain"]: e["reliability"] for e in entries if e["counted"]}
+
+
+def _outweighs(side: dict[str, str], other: dict[str, str]) -> bool:
+    return (
+        len(side) >= 3
+        and len(other) == 1
+        and reliability.RELIABLE in side.values()
+        and reliability.RELIABLE not in other.values()
+    )
+
+
 def verify(evidence: dict, labels_doc: dict) -> dict:
     """Check the reader's quotes against stored text and apply the verdict rules.
 
-    TRUE needs verified support from 2+ independent domains and no verified
-    refutation; FALSE is the mirror image; anything else is INCONCLUSIVE.
+    Only counted domains vote (see reliability.NOT_COUNTED). TRUE needs 2+ supporting
+    domains and none refuting, or 3+ supporting against a single refuting domain when
+    a supporter is rated reliable and the dissenter is not. FALSE mirrors it; anything
+    else is INCONCLUSIVE.
     """
     if labels_doc.get("evidence_id") != evidence.get("evidence_id"):
         raise VerifyInputError(
@@ -378,24 +411,36 @@ def verify(evidence: dict, labels_doc: dict) -> dict:
             why = "quote too short" if len(_normalize(quote)) < MIN_QUOTE_CHARS else "quote not found in source text"
             rejected.append({"source": n, "stance": stance, "quote": quote, "why": why})
             continue
-        entry = {"source": n, "domain": src["domain"], "url": src["url"], "quote": quote}
+        rating = src.get("reliability") or {"rating": reliability.UNRATED, "why": "not rated"}
+        entry = {"source": n, "domain": src["domain"], "url": src["url"], "quote": quote,
+                 "reliability": rating["rating"], "reliability_why": rating["why"],
+                 "counted": rating["rating"] not in reliability.NOT_COUNTED}
         (supporting if stance == "supports" else refuting).append(entry)
 
     if unlabeled:
         raise VerifyInputError(f"every source must be labeled; missing {sorted(unlabeled)}")
 
-    sup = {e["domain"] for e in supporting}
-    ref = {e["domain"] for e in refuting}
+    sup = _votes(supporting)
+    ref = _votes(refuting)
+    dropped = sum(not e["counted"] for e in supporting + refuting)
     if len(sup) >= 2 and not ref:
         verdict, reason = "TRUE", f"supported by {len(sup)} independent sources, none against"
     elif len(ref) >= 2 and not sup:
         verdict, reason = "FALSE", f"refuted by {len(ref)} independent sources, none in support"
+    elif _outweighs(sup, ref):
+        verdict, reason = "TRUE", (f"supported by {len(sup)} independent sources including a reliable one; "
+                                   f"1 dissent ({next(iter(ref))}, rated {ref[next(iter(ref))]})")
+    elif _outweighs(ref, sup):
+        verdict, reason = "FALSE", (f"refuted by {len(ref)} independent sources including a reliable one; "
+                                    f"1 dissent ({next(iter(sup))}, rated {sup[next(iter(sup))]})")
     elif sup and ref:
         verdict, reason = "INCONCLUSIVE", "sources conflict"
     elif sup or ref:
         verdict, reason = "INCONCLUSIVE", "only one independent source takes a side"
     else:
         verdict, reason = "INCONCLUSIVE", "no verified evidence either way"
+    if dropped:
+        reason += f" ({dropped} low-reliability quote(s) not counted)"
 
     return {
         "evidence_id": evidence["evidence_id"],
