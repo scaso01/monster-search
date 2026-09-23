@@ -27,7 +27,7 @@ def _r(url: str, title: str = "t", snippet: str = "snippet text") -> SearchResul
     return SearchResult(title=title, url=url, snippet=snippet, source="x")
 
 
-def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), fail=()):
+def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), perplexity=(), fail=()):
     """Stub every engine; names in ``fail`` raise instead of answering."""
 
     def make(name, results):
@@ -41,6 +41,8 @@ def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), fail=()):
     monkeypatch.setattr(fc.DdgBrowserClient, "search", make("ddg", ddg))
     monkeypatch.setattr(fc.GNewsClient, "search", make("gnews", gnews))
     monkeypatch.setattr(fc.BraveHtmlClient, "search", make("brave", brave))
+    ppx = make("perplexity", perplexity)
+    monkeypatch.setattr(fc.PerplexityClient, "search", lambda self, q, **kw: ("AI verdict text", ppx(self, q)))
 
 
 def _pages(monkeypatch, texts: dict[str, str], fail=()):
@@ -100,7 +102,7 @@ def test_no_results_raises_no_evidence(monkeypatch):
 
 
 def test_every_engine_failing_is_reported_as_infrastructure(monkeypatch):
-    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave"))
+    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave", "perplexity"))
     with pytest.raises(fc.NoEvidenceError) as exc:
         fc.gather("claim", Config())
     assert exc.value.all_failed is True
@@ -201,6 +203,7 @@ def test_brave_is_not_spent_when_core_engines_suffice(monkeypatch):
     ev = fc.gather("claim", Config(), fetch_pages=False)
     assert called == []
     assert ev["engines"]["brave"] == {"status": "not needed"}
+    assert ev["engines"]["perplexity"] == {"status": "not needed"}
 
 
 def test_brave_fills_in_when_core_engines_find_too_little(monkeypatch):
@@ -208,6 +211,15 @@ def test_brave_fills_in_when_core_engines_find_too_little(monkeypatch):
     ev = fc.gather("claim", Config(), fetch_pages=False)
     assert ev["engines"]["brave"] == {"status": "ok", "count": 1}
     assert {s["url"] for s in ev["sources"]} == {"https://a.com/1", "https://b.com/1"}
+
+
+def test_perplexity_fallback_uses_cited_pages_never_its_answer(monkeypatch):
+    _engines(monkeypatch, perplexity=[_r("https://p.com/1", snippet="page snippet")], fail=("brave",))
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert ev["engines"]["perplexity"] == {"status": "ok", "count": 1}
+    assert ev["engines"]["brave"]["status"] == "error"
+    assert [s["url"] for s in ev["sources"]] == ["https://p.com/1"]
+    assert "AI verdict text" not in json.dumps(ev)
 
 
 def test_brave_missing_dependency_is_skipped_not_fatal(monkeypatch):
@@ -350,7 +362,7 @@ def test_cli_gather_exits_3_when_no_evidence(monkeypatch, capsys):
 
 
 def test_cli_gather_exits_1_when_every_engine_fails(monkeypatch):
-    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave"))
+    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave", "perplexity"))
     with pytest.raises(SystemExit) as exc:
         main(["factcheck", "gather", "claim"])
     assert exc.value.code == 1

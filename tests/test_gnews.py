@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -224,3 +226,22 @@ async def test_gnews_async_empty():
     client = GNewsClient()
     results = await client.asearch("xyznonexistent")
     assert results == []
+
+
+@respx.mock
+def test_gnews_decodes_redirect_via_batchexecute():
+    """Google News links are decoded to the real article, not left as redirects."""
+    respx.get("https://news.google.com/rss/search").mock(
+        return_value=httpx.Response(200, text=RSS_FEED)
+    )
+    respx.get(url__startswith="https://news.google.com/articles/").mock(
+        return_value=httpx.Response(200, text='<div data-n-a-sg="SIG" data-n-a-ts="1758600000"></div>')
+    )
+    inner = '["garturlres","https://techblog.com/python-314-released",1]'
+    envelope = ")]}'\n\n" + json.dumps([["wrb.fr", "Fbv4je", inner, None, None, None, "generic"], ["di", 1], ["af.httprm", 1]])
+    batch = respx.post("https://news.google.com/_/DotsSplashUi/data/batchexecute").mock(
+        return_value=httpx.Response(200, text=envelope)
+    )
+    results = GNewsClient().search("python", max_results=1)
+    assert results[0].url == "https://techblog.com/python-314-released"
+    assert "SIG" in httpx.QueryParams(batch.calls[0].request.content.decode())["f.req"]

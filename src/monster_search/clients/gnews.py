@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from urllib.parse import quote, urlsplit
 
 import feedparser
 import httpx
@@ -12,6 +14,52 @@ from monster_search.config import Config
 from monster_search.models import SearchResult
 
 GNEWS_RSS_BASE = "https://news.google.com/rss/search"
+
+# Google News RSS links are encrypted redirects that a HEAD no longer follows, so the
+# article URL is decoded through Google's own batchexecute call (ported from yt-intel's
+# gnews.py, verified live 2026-09-23: 6/6 links in 3.3s). HEAD stays as the fallback.
+_BATCH_URL = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+_SIGNATURE = re.compile(r'data-n-a-sg="([^"]+)"')
+_TIMESTAMP = re.compile(r'data-n-a-ts="([^"]+)"')
+# The inner array must be exactly 17 elements; an 18th makes Google answer `[3]`.
+_REQUEST = (
+    '["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,'
+    'null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",'
+    '{timestamp},"{signature}"]'
+)
+
+
+def _is_google_news(url: str) -> bool:
+    parts = urlsplit(url or "")
+    segs = parts.path.split("/")
+    return parts.hostname == "news.google.com" and len(segs) > 1 and segs[-2] in ("articles", "read")
+
+
+def _article_page(url: str) -> str:
+    return f"https://news.google.com/articles/{urlsplit(url).path.split('/')[-1]}"
+
+
+def _batch_body(url: str, page_html: str) -> str | None:
+    signature = _SIGNATURE.search(page_html)
+    timestamp = _TIMESTAMP.search(page_html)
+    if not (signature and timestamp):
+        return None
+    payload = ["Fbv4je", _REQUEST.format(article_id=urlsplit(url).path.split("/")[-1],
+                                         timestamp=timestamp.group(1),
+                                         signature=signature.group(1))]
+    return f"f.req={quote(json.dumps([[payload]]))}"
+
+
+def _decoded_url(response_text: str) -> str:
+    # XSSI-guarded envelope: a `)]}'` line, a blank line, the payload, two bookkeeping frames.
+    body = json.loads(response_text.split("\n\n")[1])[:-2]
+    found = json.loads(body[0][2])[1]
+    return found if isinstance(found, str) and found.startswith("http") else ""
+
+
+_BATCH_HEADERS = {"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"}
 
 
 def _strip_html(text: str) -> str:
@@ -25,8 +73,31 @@ class GNewsClient:
     def __init__(self, config: Config | None = None) -> None:
         self._config = config or Config()
 
+    def _decode(self, google_url: str, client: httpx.Client) -> str:
+        page = client.get(_article_page(google_url), headers={"User-Agent": _UA}, follow_redirects=True)
+        body = _batch_body(google_url, page.text) if page.status_code == 200 else None
+        if not body:
+            return ""
+        resp = client.post(_BATCH_URL, content=body, headers=_BATCH_HEADERS)
+        return _decoded_url(resp.text) if resp.status_code == 200 else ""
+
+    async def _adecode(self, google_url: str, client: httpx.AsyncClient) -> str:
+        page = await client.get(_article_page(google_url), headers={"User-Agent": _UA}, follow_redirects=True)
+        body = _batch_body(google_url, page.text) if page.status_code == 200 else None
+        if not body:
+            return ""
+        resp = await client.post(_BATCH_URL, content=body, headers=_BATCH_HEADERS)
+        return _decoded_url(resp.text) if resp.status_code == 200 else ""
+
     def _resolve_url(self, google_url: str, client: httpx.Client) -> str:
-        """Resolve Google redirect URL to actual article URL via HEAD."""
+        """Resolve a Google News redirect: batchexecute decode first, HEAD as fallback."""
+        if _is_google_news(google_url):
+            try:
+                found = self._decode(google_url, client)
+            except Exception:  # undocumented endpoint; any break drops to the HEAD fallback
+                found = ""
+            if found:
+                return found
         try:
             resp = client.head(google_url, follow_redirects=True)
             return str(resp.url)
@@ -34,7 +105,14 @@ class GNewsClient:
             return google_url
 
     async def _aresolve_url(self, google_url: str, client: httpx.AsyncClient) -> str:
-        """Async resolve Google redirect URL to actual article URL via HEAD."""
+        """Async twin of _resolve_url."""
+        if _is_google_news(google_url):
+            try:
+                found = await self._adecode(google_url, client)
+            except Exception:  # undocumented endpoint; any break drops to the HEAD fallback
+                found = ""
+            if found:
+                return found
         try:
             resp = await client.head(google_url, follow_redirects=True)
             return str(resp.url)
