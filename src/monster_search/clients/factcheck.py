@@ -25,6 +25,7 @@ from monster_search.clients.brave_html import BraveHtmlClient
 from monster_search.clients.crawl4ai_client import Crawl4AIClient
 from monster_search.clients.ddg_browser import DdgBrowserClient
 from monster_search.clients.gnews import GNewsClient
+from monster_search.clients.perplexity_client import PerplexityClient
 from monster_search.clients.searxng import SearXNGClient
 from monster_search.config import Config
 from monster_search.models import SearchResult
@@ -38,9 +39,10 @@ EXCLUDED_DOMAINS = ("isthisbs.org", "lenz.io")
 HOAX_TEMPLATE_DOMAINS = ("mediamass.net",)
 
 DEFAULT_MAX_SOURCES = 6
-# Brave blocks an exit for ~36 min, sometimes after one query, so it is spent only
-# when the core engines leave the claim with fewer usable sources than this.
-BRAVE_FALLBACK_BELOW = 2
+# The fallbacks are scarce: Brave blocks an exit for ~36 min, sometimes after one
+# query, and Perplexity runs on a free account's quota. They are spent only when the
+# core engines leave the claim with fewer usable sources than this.
+FALLBACK_BELOW = 2
 MAX_TEXT_CHARS = 20_000
 EXCERPT_CHARS = 500
 MIN_EXCERPT_CHARS = 80
@@ -133,15 +135,34 @@ def _run_engines(claim: str, config: Config, per_engine: int) -> tuple[list[tupl
     return found, status
 
 
-def _run_brave(claim: str, config: Config, per_engine: int, found: list) -> dict:
-    try:
-        results = BraveHtmlClient(config=config).search(claim, max_results=per_engine)
-    except ImportError:
-        return {"status": "skipped", "error": "curl_cffi not installed"}
-    except Exception as exc:  # reported in the engine status like the core engines
-        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:300]}
-    found.append(("brave", results))
-    return {"status": "ok", "count": len(results)}
+def _perplexity_sources(claim: str, config: Config, per_engine: int) -> list[SearchResult]:
+    # Only the pages Perplexity cites; its own answer is another AI's verdict.
+    _, sources = PerplexityClient(config=config).search(claim)
+    return sources[:per_engine]
+
+
+_FALLBACKS = {
+    "brave": lambda claim, config, n: BraveHtmlClient(config=config).search(claim, max_results=n),
+    "perplexity": _perplexity_sources,
+}
+
+
+def _run_fallbacks(claim: str, config: Config, per_engine: int, found: list) -> dict[str, dict]:
+    status: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(_FALLBACKS)) as pool:
+        futures = {name: pool.submit(fn, claim, config, per_engine) for name, fn in _FALLBACKS.items()}
+        for name, fut in futures.items():
+            try:
+                results = fut.result()
+            except ImportError:
+                status[name] = {"status": "skipped", "error": "curl_cffi not installed"}
+                continue
+            except Exception as exc:  # reported in the engine status like the core engines
+                status[name] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:300]}
+                continue
+            status[name] = {"status": "ok", "count": len(results)}
+            found.append((name, results))
+    return status
 
 
 def _rank(found: list[tuple[str, list[SearchResult]]], max_sources: int) -> tuple[list[dict], list[dict]]:
@@ -241,11 +262,11 @@ def gather(
     per_engine = max(5, max_sources)
     found, engines = _run_engines(claim, config, per_engine)
     sources, excluded = _rank(found, max_sources)
-    if len(sources) < BRAVE_FALLBACK_BELOW:
-        engines["brave"] = _run_brave(claim, config, per_engine, found)
+    if len(sources) < FALLBACK_BELOW:
+        engines.update(_run_fallbacks(claim, config, per_engine, found))
         sources, excluded = _rank(found, max_sources)
     else:
-        engines["brave"] = {"status": "not needed"}
+        engines.update({name: {"status": "not needed"} for name in _FALLBACKS})
     if not sources:
         all_failed = not any(s["status"] == "ok" for s in engines.values())
         why = "every search engine failed" if all_failed else "search engines returned no usable sources"

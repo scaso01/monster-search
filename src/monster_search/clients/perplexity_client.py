@@ -57,7 +57,8 @@ class PerplexityClient:
             return None
         for cookie in jar:
             if cookie.name == _SESSION_COOKIE and "perplexity" in (cookie.domain or ""):
-                return cookie.value or None
+                # An expired cookie is still in the profile; sending it reads as logged out.
+                return None if cookie.is_expired() else (cookie.value or None)
         return None
 
     def _parse_sse(self, text: str) -> tuple[str, list[SearchResult]]:
@@ -138,6 +139,15 @@ class PerplexityClient:
                 elif step_type == "SEARCH_RESULTS":
                     for r in content.get("results", []):
                         add_source(r)
+
+        # A logged-out session still gets a 200 whose whole answer is this wall.
+        if not sources and answer.strip().lower().startswith("sign up"):
+            raise RuntimeError(
+                "Perplexity treated the request as logged out (\"Sign up and repeat your "
+                "request\"). Log in to perplexity.ai again in the browser named by "
+                "MONSTER_PERPLEXITY_COOKIES_FROM_BROWSER, or refresh "
+                "MONSTER_PERPLEXITY_SESSION_TOKEN."
+            )
 
         if not answer and not sources:
             # The request succeeded and the stream contained nothing usable,
