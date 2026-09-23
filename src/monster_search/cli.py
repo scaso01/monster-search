@@ -120,6 +120,53 @@ def _format_json(results, message: str = "", answer: str = "") -> str:
     return json.dumps(data, indent=2)
 
 
+def _handle_factcheck(argv: list[str]) -> None:
+    """Handle factcheck subcommand. Exit codes: 0 ok, 1 every engine failed, 2 bad input, 3 no evidence."""
+    from monster_search.clients import factcheck as fc
+
+    parser = argparse.ArgumentParser(
+        prog="monster-search factcheck",
+        description="Gather web evidence for a claim, then verify a reader's quoted labels against it.",
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    g = sub.add_parser("gather", help="Collect evidence for one claim (JSON on stdout)")
+    g.add_argument("claim", nargs="+", help="The claim to check")
+    g.add_argument("--max-sources", type=int, default=fc.DEFAULT_MAX_SOURCES)
+    g.add_argument("--out", type=Path, help="Where to store the full evidence (default: temp dir)")
+    g.add_argument("--no-fetch", action="store_true", help="Use search snippets only, skip page download")
+
+    v = sub.add_parser("verify", help="Check quoted labels against stored evidence (JSON on stdout)")
+    v.add_argument("evidence", type=Path, help="Evidence file written by gather")
+    v.add_argument("labels", type=Path, help='JSON: {"evidence_id": ..., "labels": [{"source", "stance", "quote"}]}')
+
+    args = parser.parse_args(argv)
+    config = Config()
+
+    if args.action == "gather":
+        claim = " ".join(args.claim)
+        try:
+            evidence = fc.gather(claim, config, max_sources=args.max_sources, fetch_pages=not args.no_fetch)
+        except fc.NoEvidenceError as exc:
+            print(json.dumps({"claim": claim, "error": str(exc), "engines": exc.engines}, indent=2))
+            print(f"error: {exc} - claim is UNCHECKED", file=sys.stderr)
+            sys.exit(1 if exc.all_failed else 3)
+        path = fc.save_evidence(evidence, args.out or fc.default_evidence_path(evidence["evidence_id"]))
+        view = fc.reader_view(evidence)
+        view["evidence_file"] = str(path)
+        print(json.dumps(view, ensure_ascii=False, indent=2))
+        return
+
+    try:
+        evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
+        labels = json.loads(args.labels.read_text(encoding="utf-8"))
+        result = fc.verify(evidence, labels)
+    except (OSError, json.JSONDecodeError, fc.VerifyInputError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def _handle_watch(argv: list[str]) -> None:
     """Handle watch subcommand for changedetection.io."""
     from monster_search.clients.changedetection_client import ChangeDetectionClient
@@ -300,6 +347,9 @@ def main(argv: list[str] | None = None) -> None:
     # Route "watch" subcommand separately to avoid argparse positional conflicts
     if argv and argv[0] == "watch":
         _handle_watch(argv[1:])
+        return
+    if argv and argv[0] == "factcheck":
+        _handle_factcheck(argv[1:])
         return
 
     parser = argparse.ArgumentParser(
@@ -494,7 +544,12 @@ def main(argv: list[str] | None = None) -> None:
         elif engine in ("synthesizer", "synth"):
             from monster_search.clients.synthesizer import SynthesizerClient
             sc = SynthesizerClient(config=config)
-            message, results = sc.search(query, deep=args.deep)
+            answer, results = sc.search(query, deep=args.deep, max_sources=max_results)
+            if not answer and not results:
+                # The client returns empty by design so smart_search can fall back to
+                # other engines; a pinned synth run has no fallback, so say so.
+                print("error: synth found no web evidence (search engines returned nothing)", file=sys.stderr)
+                sys.exit(3)
         elif engine == "youtube":
             from monster_search.clients.youtube import YouTubeClient
             yc = YouTubeClient(config=config)
