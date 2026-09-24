@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from monster_search.clients.brave_html import BraveHtmlClient
+from monster_search.clients.claimreview import ClaimReviewClient
 from monster_search.clients.crawl4ai_client import Crawl4AIClient
 from monster_search.clients.ddg_browser import DdgBrowserClient
 from monster_search.clients.gnews import GNewsClient
@@ -34,12 +35,17 @@ from monster_search.models import SearchResult
 # Sites that publish another AI's verdict on the claim. Citing them makes the check
 # circular: isthisbs.org republishes Lenz verdicts ("POWERED BY LENZ") and showed up
 # in 17 of 40 sampled real claims.
-EXCLUDED_DOMAINS = ("isthisbs.org", "lenz.io")
+# factually.co is an AI research engine ("Searched for... Found 14 sources", "Factually
+# can make mistakes"); it supplied the only FALSE in the 2026-09-23 blind test.
+EXCLUDED_DOMAINS = ("isthisbs.org", "lenz.io", "factually.co")
 # mediamass.net auto-generates a "death hoax, alive and well" page dated today for
 # any celebrity, so it would refute a real death.
 HOAX_TEMPLATE_DOMAINS = ("mediamass.net",)
 
-DEFAULT_MAX_SOURCES = 6
+# 7 of 25 blind-test claims stalled at "only one site takes a side" with 6 slots,
+# several of them spent on a second page from a domain that votes once.
+DEFAULT_MAX_SOURCES = 8
+GNEWS_RESULTS = 3
 # The fallbacks are scarce: Brave blocks an exit for ~36 min, sometimes after one
 # query, and Perplexity runs on a free account's quota. They are spent only when the
 # core engines leave the claim with fewer sources that can vote than this.
@@ -97,6 +103,8 @@ def _url_key(url: str) -> str:
 
 
 def _exclusion_reason(url: str) -> str | None:
+    if not url.startswith(("http://", "https://")):
+        return "not a web page"  # ddg sometimes returns chrome-error://chromewebdata/
     if domain_of(url) in EXCLUDED_DOMAINS:
         return "publishes another AI's verdict (circular)"
     if domain_of(url) in HOAX_TEMPLATE_DOMAINS:
@@ -110,9 +118,12 @@ def _exclusion_reason(url: str) -> str | None:
 
 def _run_engines(claim: str, config: Config, per_engine: int) -> tuple[list[tuple[str, list[SearchResult]]], dict[str, dict]]:
     engines = {
+        "claimreview": lambda: ClaimReviewClient().search(claim, max_results=3),
         "searxng": lambda: SearXNGClient(config=config).search(claim, max_results=per_engine),
         "ddg": lambda: DdgBrowserClient(config=config).search(claim, max_results=per_engine),
-        "gnews": lambda: GNewsClient(config=config).search(claim, max_results=per_engine),
+        # News is supplementary and every link costs two Google calls to decode, which
+        # Google rate-limits; three is enough for a recent-events claim.
+        "gnews": lambda: GNewsClient(config=config).search(claim, max_results=GNEWS_RESULTS),
     }
     def with_retry(fn):
         # A single ReadTimeout from ddg left a live claim UNCHECKED; one retry fixes that.
@@ -199,12 +210,20 @@ def _rank(
                 entry["found_by"].append(engine)
                 entry["_order"] = min(entry["_order"], (rank, engine_idx))
     # Sites that cannot vote (social posts, fact-failing sites) only fill leftover
-    # slots. Then multi-engine hits first, then alternate engines by rank so one
-    # engine's long tail cannot crowd out another engine's top result.
-    ranked = sorted(merged.values(), key=lambda e: (not _counts(e), -len(e["found_by"]), e["_order"]))
+    # slots, and published fact-checks come first. Then multi-engine hits, then
+    # alternate engines by rank so one engine's long tail cannot crowd out another
+    # engine's top result.
+    ranked = sorted(merged.values(), key=lambda e: (
+        not _counts(e), "claimreview" not in e["found_by"], -len(e["found_by"]), e["_order"]))
+    # A domain votes once, so a second page from it would only take a slot.
+    seen: set[str] = set()
+    picked = []
     for e in ranked:
         del e["_order"]
-    return ranked[:max_sources], [{"url": u, "why": w} for u, w in sorted(excluded.items())]
+        if e["domain"] not in seen:
+            seen.add(e["domain"])
+            picked.append(e)
+    return picked[:max_sources], [{"url": u, "why": w} for u, w in sorted(excluded.items())]
 
 
 def clean_markdown(markdown: str) -> str:
@@ -218,6 +237,17 @@ def clean_markdown(markdown: str) -> str:
     return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines())
 
 
+# Interstitials seen in the blind test (stackexchange, cambridge, apnews, britannica):
+# ~330-350 chars of "verifies you are not a bot". Short pages only, so an article that
+# mentions bots is never mistaken for one.
+BOT_PAGE_MAX_CHARS = 1500
+_BOT_PAGE = re.compile(
+    r"not a bot|verif(?:y|ies) you are (?:a )?human|just a moment|checking your browser|"
+    r"enable javascript and cookies|security service to protect|access denied|captcha",
+    re.I,
+)
+
+
 def _fetch_text(url: str, config: Config) -> tuple[str, str | None]:
     try:
         markdown, _ = Crawl4AIClient(config=config).search(url, timeout=FETCH_TIMEOUT_S)
@@ -226,6 +256,8 @@ def _fetch_text(url: str, config: Config) -> tuple[str, str | None]:
     text = clean_markdown(markdown)
     if not text.strip():
         return "", "page returned no text"
+    if len(text) < BOT_PAGE_MAX_CHARS and _BOT_PAGE.search(text):
+        return "", "page served a bot check instead of content"
     return text[:MAX_TEXT_CHARS], None
 
 

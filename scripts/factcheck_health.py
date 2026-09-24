@@ -1,7 +1,8 @@
 """Daily health check for the factcheck pipeline's fragile parts.
 
-Renews the Perplexity login (so it never lapses while unused), and proves both Google
-News link resolvers and the reliability lists still work. Every result is logged; the
+Renews the Perplexity login (so it never lapses while unused), refreshes the weekly
+fact-check index, and proves both Google News link resolvers and the reliability
+lists still work. Every result is logged; the
 .ok file is touched only when everything passes, so the watchdog's staleness check
 (job-freshness.json) pushes an alert to the phone the day something breaks.
 """
@@ -44,10 +45,15 @@ def check_perplexity() -> str:
 def check_gnews_decode() -> str:
     from monster_search.clients.gnews import GNewsClient
 
+    from monster_search.clients.gnews import DecodeRateLimited
+
     links = _google_news_links(3)
     client = GNewsClient()
     with httpx.Client(timeout=25) as http:
-        ok = sum(client._decode(u, http).startswith("http") for u in links)
+        try:
+            ok = sum(client._decode(u, http).startswith("http") for u in links)
+        except DecodeRateLimited as exc:
+            raise RuntimeError("rate-limited by Google (429); the browser layer covers it meanwhile") from exc
     if ok == 0:
         raise RuntimeError(f"batchexecute decoded 0/{len(links)} links")
     return f"decoded {ok}/{len(links)} links"
@@ -71,11 +77,23 @@ def check_reliability() -> str:
     return f"{status['domains']} rated domains"
 
 
+def check_claimreview() -> str:
+    from monster_search.clients import claimreview
+
+    claimreview.ensure_index()  # rebuilds from the feed when the index is a week old
+    hits = claimreview.ClaimReviewClient().search("The 2020 presidential election was stolen.")
+    if not hits:
+        raise RuntimeError("fact-check index returned nothing for a claim it has always matched")
+    built = datetime.datetime.fromtimestamp(claimreview._built(claimreview._db_path()))
+    return f"index built {built:%Y-%m-%d}, {len(hits)} match(es) for the canary claim"
+
+
 CHECKS = {
     "perplexity": check_perplexity,
     "gnews-decode": check_gnews_decode,
     "gnews-browser": check_gnews_browser,
     "reliability": check_reliability,
+    "claimreview": check_claimreview,
 }
 
 

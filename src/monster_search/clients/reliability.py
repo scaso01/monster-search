@@ -52,7 +52,8 @@ OVERRIDES = {"wikipedia.org": (UNRATED, "Wikipedia's self-rating applies only wi
 # Posts by anyone: a viral post repeating a claim is not evidence for it.
 _UGC = ("facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com",
         "youtube.com", "reddit.com", "quora.com", "pinterest.com", "threads.net",
-        "brainly.in", "brainly.com", "medium.com", "substack.com", "linkedin.com")
+        "brainly.in", "brainly.com", "medium.com", "substack.com", "linkedin.com",
+        "scribd.com", "askfilo.com", "studocu.com", "coursehero.com", "chegg.com")
 OVERRIDES.update({d: ("user-generated", "user-generated posts") for d in _UGC})
 
 

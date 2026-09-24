@@ -14,6 +14,7 @@ from monster_search.models import SearchResult
 def _no_browser(monkeypatch):
     """No test launches a real browser; tests of the browser layer override this."""
     monkeypatch.setattr("monster_search.clients.gnews._navigate", lambda urls: {})
+    monkeypatch.setattr("monster_search.clients.gnews._decode_blocked_until", 0.0)
 
 
 # --- RSS feed mock data ---
@@ -283,3 +284,18 @@ def test_gnews_missing_browser_leaves_links_unresolved(monkeypatch):
         raise ImportError("no playwright")
     monkeypatch.setattr(g, "_navigate", no_browser)
     assert "news.google.com" in GNewsClient().search("python", max_results=1)[0].url
+
+
+@respx.mock
+def test_gnews_429_pauses_decoding_and_hands_links_to_the_browser(monkeypatch):
+    """A rate-limited decode is not retried per link; the browser layer takes over."""
+    from monster_search.clients import gnews as g
+    monkeypatch.setattr(g, "_decode_blocked_until", 0.0)
+    respx.get("https://news.google.com/rss/search").mock(return_value=httpx.Response(200, text=RSS_FEED))
+    article = respx.get(url__startswith="https://news.google.com/articles/").mock(return_value=httpx.Response(429))
+    respx.head(url__startswith="https://news.google.com/rss/articles/").mock(return_value=httpx.Response(200))
+    monkeypatch.setattr(g, "_navigate", lambda urls: {u: f"https://real.example/{i}" for i, u in enumerate(urls)})
+    results = GNewsClient().search("python", max_results=3)
+    assert article.call_count == 1
+    assert g.decode_blocked()
+    assert [r.url for r in results] == ["https://real.example/0", "https://real.example/1", "https://real.example/2"]
