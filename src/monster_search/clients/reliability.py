@@ -150,8 +150,9 @@ def download() -> dict[str, dict]:
     return table
 
 
-def load(cache_path: Path = CACHE_PATH) -> tuple[dict[str, dict], dict]:
+def load(cache_path: Path | None = None) -> tuple[dict[str, dict], dict]:
     """(table, status). Refreshes a week-old cache; a stale cache beats nothing."""
+    cache_path = cache_path or CACHE_PATH
     cached = None
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))

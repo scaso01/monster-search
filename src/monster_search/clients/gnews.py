@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from dataclasses import replace
 from urllib.parse import quote, urlsplit
 
 import feedparser
@@ -60,6 +62,48 @@ def _decoded_url(response_text: str) -> str:
 
 
 _BATCH_HEADERS = {"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"}
+
+
+# Layer 3, from yt-intel: open the link in a real browser and read where it lands.
+# Slow (~4s a link) but Google cannot break it without breaking Google News itself,
+# and it fails for reasons unrelated to the batchexecute decode above.
+BROWSER_LIMIT = 10
+
+
+def _navigate(urls: list[str]) -> dict[str, str]:
+    """{google news url: article url} for the links a headless browser resolved."""
+    try:
+        from patchright.sync_api import sync_playwright
+    except ImportError:
+        from playwright.sync_api import sync_playwright
+
+    resolved: dict[str, str] = {}
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(user_agent=_UA)
+            for url in urls:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+                    page.wait_for_timeout(3_500)
+                except Exception:  # one bad link must not lose the rest; it stays unresolved
+                    continue
+                if not _is_google_news(page.url):
+                    resolved[url] = page.url
+        finally:
+            browser.close()
+    return resolved
+
+
+def _browser_pass(results: list[SearchResult]) -> list[SearchResult]:
+    stubborn = [r.url for r in results if _is_google_news(r.url)][:BROWSER_LIMIT]
+    if not stubborn:
+        return results
+    try:
+        resolved = _navigate(stubborn)
+    except Exception:  # no browser installed or it failed to launch; links stay unresolved
+        return results
+    return [replace(r, url=resolved[r.url]) if r.url in resolved else r for r in results]
 
 
 def _strip_html(text: str) -> str:
@@ -137,7 +181,7 @@ class GNewsClient:
                     category="news",
                 )
             )
-        return results
+        return _browser_pass(results)
 
     async def _aparse_results(
         self, feed: feedparser.FeedParserDict, max_results: int, client: httpx.AsyncClient
@@ -157,7 +201,7 @@ class GNewsClient:
                     category="news",
                 )
             )
-        return results
+        return await asyncio.to_thread(_browser_pass, results)
 
     def search(
         self,
