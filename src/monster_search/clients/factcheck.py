@@ -97,6 +97,11 @@ def domain_of(url: str) -> str:
     return ".".join(parts[-2:])
 
 
+def publisher_of(domain: str) -> str:
+    """One vote per publisher: bbc.com and bbc.co.uk are the same newsroom."""
+    return domain.split(".", 1)[0]
+
+
 def _url_key(url: str) -> str:
     s = urlsplit(url)
     return f"{(s.hostname or '').lower().removeprefix('www.')}{s.path.rstrip('/')}"
@@ -220,8 +225,8 @@ def _rank(
     picked = []
     for e in ranked:
         del e["_order"]
-        if e["domain"] not in seen:
-            seen.add(e["domain"])
+        if publisher_of(e["domain"]) not in seen:
+            seen.add(publisher_of(e["domain"]))
             picked.append(e)
     return picked[:max_sources], [{"url": u, "why": w} for u, w in sorted(excluded.items())]
 
@@ -242,10 +247,14 @@ def clean_markdown(markdown: str) -> str:
 # mentions bots is never mistaken for one.
 BOT_PAGE_MAX_CHARS = 1500
 _BOT_PAGE = re.compile(
-    r"not a bot|verif(?:y|ies) you are (?:a )?human|just a moment|checking your browser|"
-    r"enable javascript and cookies|security service to protect|access denied|captcha",
+    r"not a (?:bot|robot)|verif(?:y|ies|ying) (?:that )?you are (?:a )?human|just a (?:moment|quick check)|"
+    r"checking your (?:browser|connection)|verifying your browser|security checkpoint|unusual activity|"
+    r"enable javascript and cookies|security service to protect|access denied|request blocked|captcha",
     re.I,
 )
+# In both blind tests every fetched page under ~660 chars was a 403/404, a bot check
+# or "Loading site content", and every real article was over 1,000.
+MIN_PAGE_CHARS = 700
 
 
 def _fetch_text(url: str, config: Config) -> tuple[str, str | None]:
@@ -258,6 +267,8 @@ def _fetch_text(url: str, config: Config) -> tuple[str, str | None]:
         return "", "page returned no text"
     if len(text) < BOT_PAGE_MAX_CHARS and _BOT_PAGE.search(text):
         return "", "page served a bot check instead of content"
+    if len(text) < MIN_PAGE_CHARS:
+        return "", "page too short to be the article (error or block page)"
     return text[:MAX_TEXT_CHARS], None
 
 
@@ -394,8 +405,14 @@ def quote_in_text(quote: str, text: str) -> bool:
 
 
 def _votes(entries: list[dict]) -> dict[str, str]:
-    """{domain: rating} for counted entries; one vote per domain."""
-    return {e["domain"]: e["reliability"] for e in entries if e["counted"]}
+    """{domain: rating} for counted entries; one vote per publisher."""
+    votes: dict[str, str] = {}
+    publishers: set[str] = set()
+    for e in entries:
+        if e["counted"] and publisher_of(e["domain"]) not in publishers:
+            publishers.add(publisher_of(e["domain"]))
+            votes[e["domain"]] = e["reliability"]
+    return votes
 
 
 def _outweighs(side: dict[str, str], other: dict[str, str]) -> bool:

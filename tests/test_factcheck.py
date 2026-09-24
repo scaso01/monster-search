@@ -312,6 +312,39 @@ def test_brave_client_raises_when_every_exit_is_blocked(monkeypatch):
 TEXT_A = "Spotify launched in the United States in July 2011 after long negotiations."
 TEXT_B = "The service reached American listeners in July 2011, according to the company."
 TEXT_C = "Spotify first launched in the United States in 2009, one report wrongly claimed."
+# Real articles run past MIN_PAGE_CHARS; shorter fetched pages are treated as error pages.
+ARTICLE = "Background paragraph about the music streaming industry and its licensing history. " * 10 + "\n\n"
+
+
+def test_short_fetched_page_is_treated_as_an_error_page(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://invidious.io/x", snippet="the snippet")])
+    _pages(monkeypatch, {"https://invidious.io/x": "# 404 Not Found * * * nginx/1.29.2"})
+    src = fc.gather("claim", Config())["sources"][0]
+    assert src["text_source"] == "snippet"
+    assert src["fetch_error"] == "page too short to be the article (error or block page)"
+
+
+@pytest.mark.parametrize("page", [
+    "We're verifying your browser Website owner? Click here to fix Vercel Security Checkpoint",
+    "# Security check required We've detected unusual activity from your network.",
+    "# Just a quick check We're checking your connection to prevent automated abuse",
+])
+def test_more_bot_check_pages_are_caught(monkeypatch, page):
+    _engines(monkeypatch, ddg=[_r("https://x.com.au/x", snippet="s")])
+    _pages(monkeypatch, {"https://x.com.au/x": page + " filler" * 150})
+    assert fc.gather("claim", Config())["sources"][0]["fetch_error"] == "page served a bot check instead of content"
+
+
+def test_same_publisher_on_two_tlds_votes_once():
+    ev = _evidence(("https://www.bbc.com/1", TEXT_A), ("https://www.bbc.co.uk/2", TEXT_B))
+    out = fc.verify(ev, _labels((1, "supports", Q_A), (2, "supports", Q_B)))
+    assert out["verdict"] == "INCONCLUSIVE"
+    assert out["reason"] == "only one independent source takes a side"
+
+
+def test_same_publisher_on_two_tlds_takes_one_slot(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://www.bbc.com/1"), _r("https://www.bbc.co.uk/2"), _r("https://a.com/3")])
+    assert [s["domain"] for s in fc.gather("claim", Config(), fetch_pages=False)["sources"]] == ["bbc.com", "a.com"]
 
 
 def _evidence(*sources) -> dict:
@@ -511,7 +544,7 @@ def test_cli_gather_exits_1_when_every_engine_fails(monkeypatch):
 
 def test_cli_gather_then_verify_round_trip(monkeypatch, capsys, tmp_path):
     _engines(monkeypatch, ddg=[_r("https://a.com/1"), _r("https://b.org/2")])
-    _pages(monkeypatch, {"https://a.com/1": TEXT_A, "https://b.org/2": TEXT_B})
+    _pages(monkeypatch, {"https://a.com/1": ARTICLE + TEXT_A, "https://b.org/2": ARTICLE + TEXT_B})
     ev_file = tmp_path / "ev.json"
     main(["factcheck", "gather", "Spotify launched in the US in July 2011", "--out", str(ev_file)])
     view = json.loads(capsys.readouterr().out)
