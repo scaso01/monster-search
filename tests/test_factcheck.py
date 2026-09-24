@@ -40,7 +40,7 @@ def _r(url: str, title: str = "t", snippet: str = "snippet text") -> SearchResul
     return SearchResult(title=title, url=url, snippet=snippet, source="x")
 
 
-def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), perplexity=(), fail=()):
+def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), perplexity=(), claimreview=(), fail=()):
     """Stub every engine; names in ``fail`` raise instead of answering."""
 
     def make(name, results):
@@ -50,6 +50,7 @@ def _engines(monkeypatch, searxng=(), ddg=(), gnews=(), brave=(), perplexity=(),
             return list(results)
         return search
 
+    monkeypatch.setattr(fc.ClaimReviewClient, "search", make("claimreview", claimreview))
     monkeypatch.setattr(fc.SearXNGClient, "search", make("searxng", searxng))
     monkeypatch.setattr(fc.DdgBrowserClient, "search", make("ddg", ddg))
     monkeypatch.setattr(fc.GNewsClient, "search", make("gnews", gnews))
@@ -115,7 +116,7 @@ def test_no_results_raises_no_evidence(monkeypatch):
 
 
 def test_every_engine_failing_is_reported_as_infrastructure(monkeypatch):
-    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave", "perplexity"))
+    _engines(monkeypatch, fail=("claimreview", "searxng", "ddg", "gnews", "brave", "perplexity"))
     with pytest.raises(fc.NoEvidenceError) as exc:
         fc.gather("claim", Config())
     assert exc.value.all_failed is True
@@ -172,9 +173,41 @@ def test_ranking_puts_multi_engine_hits_first_then_alternates(monkeypatch):
     )
     ev = fc.gather("claim", Config(), fetch_pages=False)
     assert [s["url"] for s in ev["sources"]] == [
-        "https://both.com/x", "https://s.com/1", "https://d.com/1", "https://s.com/2",
+        "https://both.com/x", "https://s.com/1", "https://d.com/1",  # s.com/2: its domain already voted
     ]
     assert ev["sources"][0]["found_by"] == ["searxng", "ddg"]
+
+
+def test_published_fact_checks_rank_first(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://a.com/1"), _r("https://b.com/1")],
+             claimreview=[_r("https://www.politifact.com/factchecks/x")])
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert ev["sources"][0]["url"] == "https://www.politifact.com/factchecks/x"
+    assert ev["engines"]["claimreview"] == {"status": "ok", "count": 1}
+
+
+def test_non_web_links_and_ai_research_sites_are_excluded(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("chrome-error://chromewebdata/"), _r("https://factually.co/fact-checks/x"),
+                               _r("https://a.com/1")])
+    ev = fc.gather("claim", Config(), fetch_pages=False)
+    assert {e["why"] for e in ev["excluded"]} == {"not a web page", "publishes another AI's verdict (circular)"}
+
+
+def test_bot_check_page_falls_back_to_snippet(monkeypatch):
+    _engines(monkeypatch, ddg=[_r("https://apnews.com/x", snippet="the real snippet")])
+    _pages(monkeypatch, {"https://apnews.com/x": "This website uses a security service to protect against "
+                                                 "malicious bots. This page is displayed while the website "
+                                                 "verifies you are not a bot."})
+    src = fc.gather("claim", Config())["sources"][0]
+    assert src["text_source"] == "snippet" and src["text"] == "the real snippet"
+    assert src["fetch_error"] == "page served a bot check instead of content"
+
+
+def test_a_long_article_mentioning_bots_is_kept(monkeypatch):
+    article = "Researchers studied why a captcha stops some bots but not others. " * 40
+    _engines(monkeypatch, ddg=[_r("https://a.com/x")])
+    _pages(monkeypatch, {"https://a.com/x": article})
+    assert fc.gather("claim", Config())["sources"][0]["text_source"] == "page"
 
 
 def test_fetch_failure_falls_back_to_snippet_and_is_recorded(monkeypatch):
@@ -470,7 +503,7 @@ def test_cli_gather_exits_3_when_no_evidence(monkeypatch, capsys):
 
 
 def test_cli_gather_exits_1_when_every_engine_fails(monkeypatch):
-    _engines(monkeypatch, fail=("searxng", "ddg", "gnews", "brave", "perplexity"))
+    _engines(monkeypatch, fail=("claimreview", "searxng", "ddg", "gnews", "brave", "perplexity"))
     with pytest.raises(SystemExit) as exc:
         main(["factcheck", "gather", "claim"])
     assert exc.value.code == 1

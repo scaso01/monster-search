@@ -28,6 +28,7 @@ def _clean_monster_env(request, monkeypatch):
         tmp = request.getfixturevalue("tmp_path")
         monkeypatch.setattr("monster_search.clients.perplexity_client.SESSION_CACHE", tmp / "pplx.json")
         monkeypatch.setattr("monster_search.clients.reliability.CACHE_PATH", tmp / "reliability.json")
+        monkeypatch.setattr("monster_search.clients.claimreview.CACHE_DIR", tmp)
     # Reset connection pool so respx mocking works (no stale clients)
     _close_pool()
 

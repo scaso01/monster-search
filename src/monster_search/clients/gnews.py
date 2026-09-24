@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import replace
 from urllib.parse import quote, urlsplit
 
@@ -59,6 +60,28 @@ def _decoded_url(response_text: str) -> str:
     body = json.loads(response_text.split("\n\n")[1])[:-2]
     found = json.loads(body[0][2])[1]
     return found if isinstance(found, str) and found.startswith("http") else ""
+
+
+# Google answers heavy decode traffic with 429 and a /sorry/ page (hit 2026-09-23 after
+# ~150 decodes in 15 minutes). Hammering on extends the block, so decoding pauses and
+# links go straight to the browser layer until this passes.
+DECODE_BACKOFF_S = 15 * 60
+_decode_blocked_until = 0.0
+
+
+class DecodeRateLimited(RuntimeError):
+    """Google is rate-limiting the batchexecute decode from this IP."""
+
+
+def _note_rate_limit(status_code: int) -> None:
+    global _decode_blocked_until
+    if status_code == 429:
+        _decode_blocked_until = time.time() + DECODE_BACKOFF_S
+        raise DecodeRateLimited("Google News returned 429; decode paused")
+
+
+def decode_blocked() -> bool:
+    return time.time() < _decode_blocked_until
 
 
 _BATCH_HEADERS = {"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"}
@@ -119,23 +142,27 @@ class GNewsClient:
 
     def _decode(self, google_url: str, client: httpx.Client) -> str:
         page = client.get(_article_page(google_url), headers={"User-Agent": _UA}, follow_redirects=True)
+        _note_rate_limit(page.status_code)
         body = _batch_body(google_url, page.text) if page.status_code == 200 else None
         if not body:
             return ""
         resp = client.post(_BATCH_URL, content=body, headers=_BATCH_HEADERS)
+        _note_rate_limit(resp.status_code)
         return _decoded_url(resp.text) if resp.status_code == 200 else ""
 
     async def _adecode(self, google_url: str, client: httpx.AsyncClient) -> str:
         page = await client.get(_article_page(google_url), headers={"User-Agent": _UA}, follow_redirects=True)
+        _note_rate_limit(page.status_code)
         body = _batch_body(google_url, page.text) if page.status_code == 200 else None
         if not body:
             return ""
         resp = await client.post(_BATCH_URL, content=body, headers=_BATCH_HEADERS)
+        _note_rate_limit(resp.status_code)
         return _decoded_url(resp.text) if resp.status_code == 200 else ""
 
     def _resolve_url(self, google_url: str, client: httpx.Client) -> str:
         """Resolve a Google News redirect: batchexecute decode first, HEAD as fallback."""
-        if _is_google_news(google_url):
+        if _is_google_news(google_url) and not decode_blocked():
             try:
                 found = self._decode(google_url, client)
             except Exception:  # undocumented endpoint; any break drops to the HEAD fallback
@@ -150,7 +177,7 @@ class GNewsClient:
 
     async def _aresolve_url(self, google_url: str, client: httpx.AsyncClient) -> str:
         """Async twin of _resolve_url."""
-        if _is_google_news(google_url):
+        if _is_google_news(google_url) and not decode_blocked():
             try:
                 found = await self._adecode(google_url, client)
             except Exception:  # undocumented endpoint; any break drops to the HEAD fallback
