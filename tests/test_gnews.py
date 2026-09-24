@@ -10,6 +10,12 @@ from monster_search.clients.gnews import GNewsClient, _strip_html
 from monster_search.config import Config
 from monster_search.models import SearchResult
 
+@pytest.fixture(autouse=True)
+def _no_browser(monkeypatch):
+    """No test launches a real browser; tests of the browser layer override this."""
+    monkeypatch.setattr("monster_search.clients.gnews._navigate", lambda urls: {})
+
+
 # --- RSS feed mock data ---
 
 RSS_FEED = """<?xml version="1.0" encoding="UTF-8"?>
@@ -245,3 +251,35 @@ def test_gnews_decodes_redirect_via_batchexecute():
     results = GNewsClient().search("python", max_results=1)
     assert results[0].url == "https://techblog.com/python-314-released"
     assert "SIG" in httpx.QueryParams(batch.calls[0].request.content.decode())["f.req"]
+
+
+@respx.mock
+def test_gnews_browser_resolves_what_decode_and_head_could_not(monkeypatch):
+    """When Google breaks the decode endpoint, a real browser still finds the article."""
+    from monster_search.clients import gnews as g
+    respx.get("https://news.google.com/rss/search").mock(return_value=httpx.Response(200, text=RSS_FEED))
+    respx.get(url__startswith="https://news.google.com/articles/").mock(return_value=httpx.Response(500))
+    respx.head(url__startswith="https://news.google.com/rss/articles/").mock(return_value=httpx.Response(200))
+    seen = []
+
+    def navigate(urls):
+        seen.extend(urls)
+        return {urls[0]: "https://techblog.com/python-314-released"}
+    monkeypatch.setattr(g, "_navigate", navigate)
+    results = GNewsClient().search("python", max_results=2)
+    assert len(seen) == 2
+    assert results[0].url == "https://techblog.com/python-314-released"
+    assert "news.google.com" in results[1].url
+
+
+@respx.mock
+def test_gnews_missing_browser_leaves_links_unresolved(monkeypatch):
+    from monster_search.clients import gnews as g
+    respx.get("https://news.google.com/rss/search").mock(return_value=httpx.Response(200, text=RSS_FEED))
+    respx.get(url__startswith="https://news.google.com/articles/").mock(return_value=httpx.Response(500))
+    respx.head(url__startswith="https://news.google.com/rss/articles/").mock(return_value=httpx.Response(200))
+
+    def no_browser(urls):
+        raise ImportError("no playwright")
+    monkeypatch.setattr(g, "_navigate", no_browser)
+    assert "news.google.com" in GNewsClient().search("python", max_results=1)[0].url

@@ -4,8 +4,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from monster_search.clients import perplexity_client as pc
 from monster_search.clients.perplexity_client import PerplexityClient
 from monster_search.config import Config
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session_cache(tmp_path, monkeypatch):
+    """Never read or overwrite the real renewed-login file."""
+    monkeypatch.setattr(pc, "SESSION_CACHE", tmp_path / "perplexity-session.json")
 
 
 def test_perplexity_missing_token():
@@ -248,3 +255,67 @@ def test_parse_sse_keeps_the_last_streamed_answer_block():
     )
 
     assert answer == "Asyncio runs coroutines."
+
+
+# --- session renewal -----------------------------------------------------------
+
+def _cookie(value="new-token", max_age=2592000):
+    return f"__Secure-next-auth.session-token={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly"
+
+
+def test_renewed_cookie_is_saved_and_preferred_over_an_older_browser_cookie(monkeypatch):
+    import time
+    assert pc._save_renewal(["__cf_bm=x; Max-Age=1800", _cookie()]) > time.time() + 2_500_000
+    client = PerplexityClient(Config(perplexity_session_token="env-token"))
+    monkeypatch.setattr(client, "_token_from_browser", lambda: ("browser-token", time.time() + 60))
+    assert client._token() == "new-token"
+
+
+def test_a_fresher_browser_login_beats_the_saved_one(monkeypatch):
+    import time
+    pc._save_renewal([_cookie(max_age=60)])
+    client = PerplexityClient(Config())
+    monkeypatch.setattr(client, "_token_from_browser", lambda: ("browser-token", time.time() + 86_400))
+    assert client._token() == "browser-token"
+
+
+def test_expired_saved_login_is_ignored(monkeypatch):
+    import json
+    import time
+    pc.SESSION_CACHE.write_text(json.dumps({"token": "old", "expires": time.time() - 1}))
+    client = PerplexityClient(Config(perplexity_session_token="env-token"))
+    monkeypatch.setattr(client, "_token_from_browser", lambda: None)
+    assert client._token() == "env-token"
+
+
+def _session_returning(resp):
+    session = MagicMock()
+    session.get.return_value = resp
+    session.__enter__ = MagicMock(return_value=session)
+    session.__exit__ = MagicMock(return_value=False)
+    module = MagicMock()
+    module.Session = MagicMock(return_value=session)
+    return module
+
+
+def test_renew_saves_the_new_session(monkeypatch):
+    import sys
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"user": {"id": "u"}}
+    resp.headers.get_list.return_value = [_cookie("renewed")]
+    client = PerplexityClient(Config(perplexity_session_token="env-token"))
+    monkeypatch.setattr(client, "_token_from_browser", lambda: None)
+    with patch.dict(sys.modules, {"curl_cffi": MagicMock(), "curl_cffi.requests": _session_returning(resp)}):
+        client.renew()
+    assert pc._read_cache()[0] == "renewed"
+
+
+def test_renew_fails_loudly_when_logged_out(monkeypatch):
+    import sys
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {}
+    client = PerplexityClient(Config(perplexity_session_token="env-token"))
+    monkeypatch.setattr(client, "_token_from_browser", lambda: None)
+    with patch.dict(sys.modules, {"curl_cffi": MagicMock(), "curl_cffi.requests": _session_returning(resp)}):
+        with pytest.raises(RuntimeError, match="lapsed"):
+            client.renew()

@@ -7,6 +7,9 @@ Perplexity's internal SSE API directly. No third-party scraper library needed.
 from __future__ import annotations
 
 import json
+import re
+import time
+from pathlib import Path
 
 from monster_search.config import Config
 from monster_search.models import SearchResult
@@ -25,13 +28,45 @@ _HEADERS = {
 }
 
 
+# Perplexity re-issues the session cookie for another 30 days on every authenticated
+# response (Max-Age=2592000, seen 2026-09-23). Keeping the newest copy here means the
+# login only lapses after 30 days of no use at all, instead of 30 days after the last
+# visit in the browser. Same exposure as the browser's own cookie file, which Firefox
+# stores unencrypted.
+SESSION_CACHE = Path.home() / ".cache" / "monster-search" / "perplexity-session.json"
+
+
+def _read_cache() -> tuple[str, float] | None:
+    try:
+        data = json.loads(SESSION_CACHE.read_text(encoding="utf-8"))
+        return data["token"], float(data["expires"])
+    except FileNotFoundError:
+        return None
+
+
+def _save_renewal(set_cookies: object) -> float | None:
+    """Store a renewed session cookie from Set-Cookie headers; its expiry, or None."""
+    for header in set_cookies if isinstance(set_cookies, list) else []:
+        if not isinstance(header, str) or not header.startswith(_SESSION_COOKIE + "="):
+            continue
+        token = header.split(";", 1)[0].split("=", 1)[1]
+        max_age = re.search(r"max-age=(\d+)", header, re.I)
+        if not token or not max_age:
+            continue
+        expires = time.time() + int(max_age.group(1))
+        SESSION_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_CACHE.write_text(json.dumps({"token": token, "expires": expires}), encoding="utf-8")
+        return expires
+    return None
+
+
 class PerplexityClient:
     """Client for Perplexity AI web search synthesis."""
 
     def __init__(self, config: Config | None = None) -> None:
         self._config = config or Config()
 
-    def _token_from_browser(self) -> str | None:
+    def _token_from_browser(self) -> tuple[str, float] | None:
         """Read the live Perplexity session cookie from a local browser profile.
 
         This is the self-healing option: as long as you are logged into
@@ -58,8 +93,40 @@ class PerplexityClient:
         for cookie in jar:
             if cookie.name == _SESSION_COOKIE and "perplexity" in (cookie.domain or ""):
                 # An expired cookie is still in the profile; sending it reads as logged out.
-                return None if cookie.is_expired() else (cookie.value or None)
+                if cookie.is_expired() or not cookie.value:
+                    return None
+                return cookie.value, float(cookie.expires or 0)
         return None
+
+    def _token(self) -> str:
+        """The live session with the latest expiry: browser or renewed cache, else the env var."""
+        now = time.time()
+        live = [c for c in (self._token_from_browser(), _read_cache()) if c and c[1] > now]
+        if live:
+            return max(live, key=lambda c: c[1])[0]
+        return self._config.perplexity_session_token
+
+    def renew(self) -> float:
+        """Refresh the session for another 30 days; returns the new expiry epoch.
+
+        Raises when Perplexity no longer recognises the login, which means someone has
+        to log in to perplexity.ai in the browser again.
+        """
+        from curl_cffi.requests import Session
+
+        token = self._token()
+        if not token:
+            raise ValueError("no Perplexity session to renew; log in to perplexity.ai in the browser")
+        with Session(impersonate="chrome", cookies={_SESSION_COOKIE: token}, headers=_HEADERS,
+                     timeout=self._config.perplexity_timeout) as session:
+            resp = session.get(f"{_API_BASE}/api/auth/session")
+            resp.raise_for_status()
+            if not (resp.json() or {}).get("user"):
+                raise RuntimeError("Perplexity login has lapsed; log in to perplexity.ai in the browser")
+            expires = _save_renewal(resp.headers.get_list("set-cookie"))
+        if expires is None:
+            raise RuntimeError("Perplexity accepted the login but sent no renewed session cookie")
+        return expires
 
     def _parse_sse(self, text: str) -> tuple[str, list[SearchResult]]:
         """Parse SSE response into answer + sources."""
@@ -174,7 +241,7 @@ class PerplexityClient:
            login, so no long-lived secret sits on disk.
         2. Static MONSTER_PERPLEXITY_SESSION_TOKEN env var (fallback).
         """
-        token = self._token_from_browser() or self._config.perplexity_session_token
+        token = self._token()
         if not token:
             raise ValueError(
                 "Perplexity session token required. Either set "
@@ -222,6 +289,9 @@ class PerplexityClient:
                     "__Secure-next-auth.session-token"
                 )
             resp.raise_for_status()
+            headers = getattr(resp, "headers", None)
+            if headers is not None and hasattr(headers, "get_list"):
+                _save_renewal(headers.get_list("set-cookie"))
             return self._parse_sse(resp.text)
 
     async def asearch(self, query: str) -> tuple[str, list[SearchResult]]:

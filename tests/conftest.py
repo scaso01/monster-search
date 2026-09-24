@@ -23,6 +23,11 @@ def _clean_monster_env(request, monkeypatch):
         for key in list(os.environ):
             if key.startswith("MONSTER_"):
                 monkeypatch.delenv(key, raising=False)
+        # On-disk state outside .env: a real renewed Perplexity login made a CLI test
+        # call Perplexity live (curl_cffi's C sockets slip past _no_network).
+        tmp = request.getfixturevalue("tmp_path")
+        monkeypatch.setattr("monster_search.clients.perplexity_client.SESSION_CACHE", tmp / "pplx.json")
+        monkeypatch.setattr("monster_search.clients.reliability.CACHE_PATH", tmp / "reliability.json")
     # Reset connection pool so respx mocking works (no stale clients)
     _close_pool()
 
