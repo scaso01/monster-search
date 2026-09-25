@@ -560,6 +560,88 @@ def test_cli_gather_then_verify_round_trip(monkeypatch, capsys, tmp_path):
     assert json.loads(capsys.readouterr().out)["verdict"] == "TRUE"
 
 
+# --- round two (debunk search) ----------------------------------------------
+
+def test_debunk_queries_keep_content_words_in_order():
+    qs = fc.debunk_queries("Einstein said that the definition of insanity is doing the same thing")
+    assert qs == ["Einstein said definition insanity doing same thing fact check",
+                  "Einstein said definition insanity doing same thing fake hoax debunked"]
+
+
+def test_debunk_queries_keep_distinctive_words_of_long_claims():
+    claim = ("A study published last year in a major peer-reviewed science journal by two "
+             "researchers found that emperor penguins living in Antarctica communicate telepathically")
+    q = fc.debunk_queries(claim)[0]
+    assert "telepathically" in q and "penguins" in q
+    assert len(q.removesuffix(" fact check").split()) == fc.DEBUNK_QUERY_WORDS
+
+
+def test_ai_fact_checkers_are_excluded():
+    assert fc._exclusion_reason("https://truthbrowser.org/check/x") is not None
+
+
+def _round_one(monkeypatch, tmp_path):
+    _engines(monkeypatch, ddg=[_r("https://a.com/1")])
+    _pages(monkeypatch, {"https://a.com/1": ARTICLE + TEXT_A})
+    return fc.gather("Spotify launched in the US in July 2011", Config())
+
+
+def test_gather_more_appends_new_publishers_and_keeps_numbers(monkeypatch, tmp_path):
+    first = _round_one(monkeypatch, tmp_path)
+    queries = []
+    def debunk(self, query, **kw):
+        queries.append(query)
+        return [_r("https://www.a.com/other"), _r("https://b.org/2"), _r("https://isthisbs.org/x")]
+    monkeypatch.setattr(fc.SearXNGClient, "search", debunk)
+    monkeypatch.setattr(fc.DdgBrowserClient, "search", debunk)
+    _pages(monkeypatch, {"https://b.org/2": ARTICLE + TEXT_B})
+    more = fc.gather_more(first, Config())
+    assert more["round_one"] == first["evidence_id"] and more["evidence_id"] != first["evidence_id"]
+    assert [s["n"] for s in more["sources"]] == [1, 2]
+    assert more["sources"][0] == first["sources"][0]  # a.com again is not new; round-one labels still fit
+    assert more["sources"][1]["domain"] == "b.org" and more["sources"][1]["round"] == 2
+    assert any(q.endswith("fact check") for q in queries) and any(q.endswith("debunked") for q in queries)
+
+
+def test_gather_more_with_nothing_new_raises(monkeypatch, tmp_path):
+    first = _round_one(monkeypatch, tmp_path)
+    monkeypatch.setattr(fc.SearXNGClient, "search", lambda self, q, **kw: [_r("https://a.com/9")])
+    monkeypatch.setattr(fc.DdgBrowserClient, "search", lambda self, q, **kw: [])
+    with pytest.raises(fc.NoEvidenceError):
+        fc.gather_more(first, Config())
+
+
+def test_cli_more_then_verify_uses_round_one_labels(monkeypatch, capsys, tmp_path):
+    first = _round_one(monkeypatch, tmp_path)
+    ev1 = tmp_path / "ev1.json"
+    fc.save_evidence(first, ev1)
+    monkeypatch.setattr(fc.SearXNGClient, "search", lambda self, q, **kw: [_r("https://b.org/2")])
+    monkeypatch.setattr(fc.DdgBrowserClient, "search", lambda self, q, **kw: [])
+    _pages(monkeypatch, {"https://b.org/2": ARTICLE + TEXT_B})
+    ev2 = tmp_path / "ev2.json"
+    main(["factcheck", "more", str(ev1), "--out", str(ev2)])
+    view = json.loads(capsys.readouterr().out)
+    labels = tmp_path / "labels.json"
+    labels.write_text(json.dumps({"evidence_id": view["evidence_id"], "labels": [
+        {"source": 1, "stance": "supports", "quote": "launched in the United States in July 2011"},
+        {"source": 2, "stance": "supports", "quote": "reached American listeners in July 2011"},
+    ]}), encoding="utf-8")
+    main(["factcheck", "verify", str(ev2), str(labels)])
+    assert json.loads(capsys.readouterr().out)["verdict"] == "TRUE"
+
+
+def test_cli_more_exits_3_when_nothing_new(monkeypatch, capsys, tmp_path):
+    first = _round_one(monkeypatch, tmp_path)
+    ev1 = tmp_path / "ev1.json"
+    fc.save_evidence(first, ev1)
+    monkeypatch.setattr(fc.SearXNGClient, "search", lambda self, q, **kw: [])
+    monkeypatch.setattr(fc.DdgBrowserClient, "search", lambda self, q, **kw: [])
+    with pytest.raises(SystemExit) as exc:
+        main(["factcheck", "more", str(ev1)])
+    assert exc.value.code == 3
+    assert "keep the round-one verdict" in capsys.readouterr().err
+
+
 def test_cli_verify_exits_2_on_bad_labels(tmp_path, capsys):
     ev_file = tmp_path / "ev.json"
     ev_file.write_text(json.dumps(_evidence(("https://a.com/1", TEXT_A))), encoding="utf-8")

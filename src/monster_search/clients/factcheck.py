@@ -37,7 +37,8 @@ from monster_search.models import SearchResult
 # in 17 of 40 sampled real claims.
 # factually.co is an AI research engine ("Searched for... Found 14 sources", "Factually
 # can make mistakes"); it supplied the only FALSE in the 2026-09-23 blind test.
-EXCLUDED_DOMAINS = ("isthisbs.org", "lenz.io", "factually.co")
+# truthbrowser.org is another AI fact-checker; round-two debunk searches surface it.
+EXCLUDED_DOMAINS = ("isthisbs.org", "lenz.io", "factually.co", "truthbrowser.org")
 # mediamass.net auto-generates a "death hoax, alive and well" page dated today for
 # any celebrity, so it would refute a real death.
 HOAX_TEMPLATE_DOMAINS = ("mediamass.net",)
@@ -358,6 +359,86 @@ def gather(
         "reliability": rating_status,
         "excluded": excluded,
         "sources": sources,
+    }
+
+
+# Round two targets what round one misses: a made-up quote or video rarely has a page
+# asserting it, but debunks use this vocabulary in their headlines.
+DEBUNK_SUFFIXES = ("fact check", "fake hoax debunked")
+DEBUNK_QUERY_WORDS = 12
+DEBUNK_MAX_NEW = 6
+
+
+def debunk_queries(claim: str) -> list[str]:
+    """The claim cut to its content words, in order, plus debunk vocabulary."""
+    words = [w for w in re.findall(r"[\w'\-\.]+", claim) if w.lower() not in _STOPWORDS]
+    if len(words) > DEBUNK_QUERY_WORDS:
+        # Keep the longest words, in claim order: a first-12 cut dropped "telepathically"
+        # and "penguins" from a long claim, the only words a debunk would share with it.
+        keep = set(sorted(range(len(words)), key=lambda i: (-len(words[i]), i))[:DEBUNK_QUERY_WORDS])
+        words = [w for i, w in enumerate(words) if i in keep]
+    core = " ".join(words) or claim
+    return [f"{core} {s}" for s in DEBUNK_SUFFIXES]
+
+
+def gather_more(evidence: dict, config: Config | None = None, *, max_new: int = DEBUNK_MAX_NEW) -> dict:
+    """Round two for an INCONCLUSIVE claim: the first round's sources, same numbers,
+    plus pages from publishers it lacked, found by debunk-phrased searches.
+
+    Returns a new evidence record; labels from round one stay valid by source number.
+    Raises NoEvidenceError when nothing new turns up, so the verdict stays as it was.
+    """
+    config = config or Config()
+    claim = evidence["claim"]
+    try:
+        ratings, _ = reliability.load()
+    except reliability.ReliabilityUnavailable:
+        ratings = {}
+
+    engines: dict[str, dict] = {}
+    found: list[tuple[str, list[SearchResult]]] = []
+    jobs = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for qi, query in enumerate(debunk_queries(claim), start=1):
+            jobs[f"searxng-debunk{qi}"] = pool.submit(SearXNGClient(config=config).search, query, max_results=8)
+            jobs[f"ddg-debunk{qi}"] = pool.submit(DdgBrowserClient(config=config).search, query, max_results=8)
+        for name, fut in jobs.items():
+            try:
+                results = fut.result()
+            except Exception as exc:  # one engine down must not sink the others; it is reported
+                engines[name] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:300]}
+                continue
+            engines[name] = {"status": "ok", "count": len(results)}
+            found.append((name, results))
+
+    have = {publisher_of(s["domain"]) for s in evidence["sources"]}
+    ranked, excluded = _rank(found, len(have) + max_new + 20, ratings)
+    new = [s for s in ranked if publisher_of(s["domain"]) not in have][:max_new]
+    if not new:
+        raise NoEvidenceError("round two found no new publishers", engines,
+                              not any(e["status"] == "ok" for e in engines.values()))
+
+    with ThreadPoolExecutor(max_workers=len(new)) as pool:
+        fetched = list(pool.map(lambda s: _fetch_text(s["url"], config), new))
+    start = max(s["n"] for s in evidence["sources"]) + 1
+    for n, (src, (text, err)) in enumerate(zip(new, fetched), start=start):
+        src["n"] = n
+        src["round"] = 2
+        src["fetch_error"] = err
+        src["text_source"] = "page" if text else "snippet"
+        src["text"] = text or src["snippet"]
+        src["excerpts"] = excerpts_for(claim, src["text"])
+
+    created = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        "evidence_id": hashlib.sha1(f"{claim}|{created}|{time.time_ns()}".encode()).hexdigest()[:12],
+        "round_one": evidence["evidence_id"],
+        "claim": claim,
+        "created": created,
+        "engines": {**evidence["engines"], **engines},
+        "reliability": evidence.get("reliability"),
+        "excluded": evidence.get("excluded", []) + excluded,
+        "sources": evidence["sources"] + new,
     }
 
 

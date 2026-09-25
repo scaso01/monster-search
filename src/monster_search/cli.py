@@ -136,6 +136,10 @@ def _handle_factcheck(argv: list[str]) -> None:
     g.add_argument("--out", type=Path, help="Where to store the full evidence (default: temp dir)")
     g.add_argument("--no-fetch", action="store_true", help="Use search snippets only, skip page download")
 
+    m = sub.add_parser("more", help="Round two for an INCONCLUSIVE claim: add debunk-search sources")
+    m.add_argument("evidence", type=Path, help="Evidence file written by gather")
+    m.add_argument("--out", type=Path, help="Where to store the combined evidence (default: temp dir)")
+
     v = sub.add_parser("verify", help="Check quoted labels against stored evidence (JSON on stdout)")
     v.add_argument("evidence", type=Path, help="Evidence file written by gather")
     v.add_argument("labels", type=Path, help='JSON: {"evidence_id": ..., "labels": [{"source", "stance", "quote"}]}')
@@ -150,6 +154,24 @@ def _handle_factcheck(argv: list[str]) -> None:
         except fc.NoEvidenceError as exc:
             print(json.dumps({"claim": claim, "error": str(exc), "engines": exc.engines}, indent=2))
             print(f"error: {exc} - claim is UNCHECKED", file=sys.stderr)
+            sys.exit(1 if exc.all_failed else 3)
+        path = fc.save_evidence(evidence, args.out or fc.default_evidence_path(evidence["evidence_id"]))
+        view = fc.reader_view(evidence)
+        view["evidence_file"] = str(path)
+        print(json.dumps(view, ensure_ascii=False, indent=2))
+        return
+
+    if args.action == "more":
+        try:
+            first = json.loads(args.evidence.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            evidence = fc.gather_more(first, config)
+        except fc.NoEvidenceError as exc:
+            print(json.dumps({"claim": first.get("claim"), "error": str(exc), "engines": exc.engines}, indent=2))
+            print(f"error: {exc} - keep the round-one verdict", file=sys.stderr)
             sys.exit(1 if exc.all_failed else 3)
         path = fc.save_evidence(evidence, args.out or fc.default_evidence_path(evidence["evidence_id"]))
         view = fc.reader_view(evidence)
