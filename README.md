@@ -331,7 +331,7 @@ src/monster_search/
 ├── benchmark.py             # Engine benchmarking (--benchmark)
 ├── fusion.py                # Weighted RRF with metadata merge
 ├── _tiered.py               # Tiered execution engine (tier1/2/3)
-├── _router.py               # Regex query classifier (9 categories)
+├── _router.py               # Regex query classifier (12 categories)
 ├── _breaker.py              # Per-engine circuit breakers
 ├── _dedup.py                # MinHash LSH content deduplication
 ├── __main__.py              # python -m support
