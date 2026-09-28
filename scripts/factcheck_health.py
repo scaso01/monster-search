@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -24,6 +25,8 @@ LOG = Path.home() / "Scripts" / "logs" / "factcheck-health.log"
 OK_FILE = LOG.with_suffix(".ok")
 # Read by the cc-chronicle Home pill; written on every run, pass or fail.
 STATUS_FILE = LOG.with_suffix(".json")
+RATE_LIMIT_TRIES = 3
+RATE_LIMIT_WAIT_S = 240
 
 
 def _google_news_links(n: int) -> list[str]:
@@ -52,11 +55,19 @@ def check_gnews_decode() -> str:
 
     links = _google_news_links(3)
     client = GNewsClient()
-    with httpx.Client(timeout=25) as http:
-        try:
-            ok = sum(client._decode(u, http).startswith("http") for u in links)
-        except DecodeRateLimited as exc:
-            raise RuntimeError("rate-limited by Google (429); the browser layer covers it meanwhile") from exc
+    # A 429 is Google throttling this IP (the 04:15 run shares it with the night jobs), not
+    # a format break: the request shape and response parse are intact. Wait it out a few
+    # times; if it persists, report degraded (not failing) because the browser layer
+    # covers resolution and gnews-browser fails loudly on its own if that breaks too.
+    for attempt in range(RATE_LIMIT_TRIES):
+        with httpx.Client(timeout=25) as http:
+            try:
+                ok = sum(client._decode(u, http).startswith("http") for u in links)
+                break
+            except DecodeRateLimited:
+                if attempt == RATE_LIMIT_TRIES - 1:
+                    return "degraded: rate-limited by Google (429) after retries; browser layer covers it"
+        time.sleep(RATE_LIMIT_WAIT_S)
     if ok == 0:
         raise RuntimeError(f"batchexecute decoded 0/{len(links)} links")
     return f"decoded {ok}/{len(links)} links"
