@@ -25,6 +25,9 @@ LOG = Path.home() / "Scripts" / "logs" / "factcheck-health.log"
 OK_FILE = LOG.with_suffix(".ok")
 # Read by the cc-chronicle Home pill; written on every run, pass or fail.
 STATUS_FILE = LOG.with_suffix(".json")
+# Engines factcheck works without (it falls back to the core engines when one errors).
+# A failure here is a warning ("degraded"), never a failing verdict.
+OPTIONAL_CHECKS = frozenset({"perplexity"})
 RATE_LIMIT_TRIES = 3
 RATE_LIMIT_WAIT_S = 240
 
@@ -111,10 +114,21 @@ CHECKS = {
 }
 
 
+def verdict(results: list[dict]) -> dict:
+    """Fold per-check results into state/failed/warnings.
+
+    Required checks failing -> "failing"; only optional ones failing -> "degraded";
+    otherwise "ok".
+    """
+    failed = [r["name"] for r in results if not r["ok"] and not r.get("optional")]
+    warnings = [r["name"] for r in results if not r["ok"] and r.get("optional")]
+    state = "failing" if failed else "degraded" if warnings else "ok"
+    return {"state": state, "failed": failed, "warnings": warnings}
+
+
 def main() -> int:
     load_dotenv(REPO / ".env")
     LOG.parent.mkdir(parents=True, exist_ok=True)
-    failed = []
     lines = []
     results = []
     for name, check in CHECKS.items():
@@ -123,19 +137,26 @@ def main() -> int:
             lines.append(f"  ok   {name}: {detail}")
             results.append({"name": name, "ok": True, "detail": detail})
         except Exception as exc:  # each failure is logged and fails the run, never swallowed
-            failed.append(name)
+            optional = name in OPTIONAL_CHECKS
             detail = f"{type(exc).__name__}: {exc}"
-            lines.append(f"  FAIL {name}: {detail}")
+            lines.append(f"  {'WARN' if optional else 'FAIL'} {name}: {detail}")
             lines.append("       " + traceback.format_exc().strip().splitlines()[-1])
-            results.append({"name": name, "ok": False, "detail": detail[:300]})
+            results.append({"name": name, "ok": False, "detail": detail[:300],
+                            **({"optional": True} if optional else {})})
     stamp = f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}"
+    v = verdict(results)
+    failed = v["failed"]
     STATUS_FILE.write_text(json.dumps({
         "run_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "state": "failing" if failed else "ok",
-        "failed": failed,
+        **v,
         "checks": results,
     }, indent=1), encoding="utf-8")
-    summary = "all passed" if not failed else "FAILED: " + ", ".join(failed)
+    if failed:
+        summary = "FAILED: " + ", ".join(failed)
+    elif v["warnings"]:
+        summary = "degraded (optional engine down): " + ", ".join(v["warnings"])
+    else:
+        summary = "all passed"
     with LOG.open("a", encoding="utf-8") as fh:
         fh.write(f"{stamp} {summary}\n" + "\n".join(lines) + "\n")
     print(f"{stamp} {summary}\n" + "\n".join(lines))
