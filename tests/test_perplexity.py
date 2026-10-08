@@ -310,12 +310,41 @@ def test_renew_saves_the_new_session(monkeypatch):
     assert pc._read_cache()[0] == "renewed"
 
 
-def test_renew_fails_loudly_when_logged_out(monkeypatch):
+def _relogin_module(relogin):
+    module = MagicMock()
+    module.relogin = relogin
+    return module
+
+
+def test_renew_signs_in_again_when_logged_out(monkeypatch):
+    import sys
+    import time
+    logged_out = MagicMock(status_code=200)
+    logged_out.json.return_value = {}
+    logged_in = MagicMock(status_code=200)
+    logged_in.json.return_value = {"user": {"id": "u"}}
+    logged_in.headers.get_list.return_value = [_cookie("renewed")]
+    curl = _session_returning(logged_out)
+    curl.Session.return_value.get.side_effect = [logged_out, logged_in]
+    relogin = MagicMock(return_value=("fresh", time.time() + 3600))
+    client = PerplexityClient(Config(perplexity_session_token="env-token"))
+    monkeypatch.setattr(client, "_token_from_browser", lambda: None)
+    with patch.dict(sys.modules, {"curl_cffi": MagicMock(), "curl_cffi.requests": curl,
+                                  "monster_search.clients.perplexity_relogin": _relogin_module(relogin)}):
+        client.renew()
+    relogin.assert_called_once()
+    assert curl.Session.call_args_list[1].kwargs["cookies"] == {pc._SESSION_COOKIE: "fresh"}
+    assert pc._read_cache()[0] == "renewed"
+
+
+def test_renew_fails_loudly_when_relogin_fails(monkeypatch):
     import sys
     resp = MagicMock(status_code=200)
     resp.json.return_value = {}
+    relogin = MagicMock(side_effect=RuntimeError("signed out of Google; run --setup"))
     client = PerplexityClient(Config(perplexity_session_token="env-token"))
     monkeypatch.setattr(client, "_token_from_browser", lambda: None)
-    with patch.dict(sys.modules, {"curl_cffi": MagicMock(), "curl_cffi.requests": _session_returning(resp)}):
-        with pytest.raises(RuntimeError, match="lapsed"):
+    with patch.dict(sys.modules, {"curl_cffi": MagicMock(), "curl_cffi.requests": _session_returning(resp),
+                                  "monster_search.clients.perplexity_relogin": _relogin_module(relogin)}):
+        with pytest.raises(RuntimeError, match="--setup"):
             client.renew()

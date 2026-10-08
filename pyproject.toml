@@ -58,7 +58,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-perplexity = ["curl_cffi>=0.7.0"]
+perplexity = ["curl_cffi>=0.7.0", "patchright>=1.63.0"]
 all-engines = ["curl_cffi>=0.7.0"]
 dev = [
     "pytest>=8.0.0",

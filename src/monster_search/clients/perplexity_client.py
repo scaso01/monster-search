@@ -36,6 +36,10 @@ _HEADERS = {
 SESSION_CACHE = Path.home() / ".cache" / "monster-search" / "perplexity-session.json"
 
 
+class PerplexityLoginLapsed(RuntimeError):
+    """Perplexity no longer recognises the stored session."""
+
+
 def _read_cache() -> tuple[str, float] | None:
     try:
         data = json.loads(SESSION_CACHE.read_text(encoding="utf-8"))
@@ -54,10 +58,15 @@ def _save_renewal(set_cookies: object) -> float | None:
         if not token or not max_age:
             continue
         expires = time.time() + int(max_age.group(1))
-        SESSION_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        SESSION_CACHE.write_text(json.dumps({"token": token, "expires": expires}), encoding="utf-8")
+        save_session(token, expires)
         return expires
     return None
+
+
+def save_session(token: str, expires: float) -> None:
+    """Store a session cookie so every caller picks it up ahead of the browser's."""
+    SESSION_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    SESSION_CACHE.write_text(json.dumps({"token": token, "expires": expires}), encoding="utf-8")
 
 
 class PerplexityClient:
@@ -109,20 +118,29 @@ class PerplexityClient:
     def renew(self) -> float:
         """Refresh the session for another 30 days; returns the new expiry epoch.
 
-        Raises when Perplexity no longer recognises the login, which means someone has
-        to log in to perplexity.ai in the browser again.
+        When Perplexity no longer recognises the login, signs in again with Google in the
+        dedicated re-login browser, then renews that fresh session.
         """
+        try:
+            return self._renew_once()
+        except PerplexityLoginLapsed:
+            from monster_search.clients.perplexity_relogin import relogin
+
+            save_session(*relogin())
+            return self._renew_once()
+
+    def _renew_once(self) -> float:
         from curl_cffi.requests import Session
 
         token = self._token()
         if not token:
-            raise ValueError("no Perplexity session to renew; log in to perplexity.ai in the browser")
+            raise PerplexityLoginLapsed("no Perplexity session to renew")
         with Session(impersonate="chrome", cookies={_SESSION_COOKIE: token}, headers=_HEADERS,
                      timeout=self._config.perplexity_timeout) as session:
             resp = session.get(f"{_API_BASE}/api/auth/session")
             resp.raise_for_status()
             if not (resp.json() or {}).get("user"):
-                raise RuntimeError("Perplexity login has lapsed; log in to perplexity.ai in the browser")
+                raise PerplexityLoginLapsed("Perplexity login has lapsed")
             expires = _save_renewal(resp.headers.get_list("set-cookie"))
         if expires is None:
             raise RuntimeError("Perplexity accepted the login but sent no renewed session cookie")
