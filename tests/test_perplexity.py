@@ -312,7 +312,7 @@ def test_renew_saves_the_new_session(monkeypatch):
 
 def _relogin_module(relogin):
     module = MagicMock()
-    module.relogin = relogin
+    module.relogin_anywhere = relogin
     return module
 
 

@@ -124,9 +124,9 @@ class PerplexityClient:
         try:
             return self._renew_once()
         except PerplexityLoginLapsed:
-            from monster_search.clients.perplexity_relogin import relogin
+            from monster_search.clients.perplexity_relogin import relogin_anywhere
 
-            save_session(*relogin())
+            save_session(*relogin_anywhere())
             return self._renew_once()
 
     def _renew_once(self) -> float:
