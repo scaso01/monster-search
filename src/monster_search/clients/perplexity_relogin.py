@@ -77,7 +77,9 @@ def _sign_in_to_perplexity(ctx, timeout_s: int) -> tuple[str, float]:
                     "`python -m monster_search.clients.perplexity_relogin --setup` once")
             account = google.locator("[data-identifier]").first
             if account.count():
-                account.click()
+                # In the off-screen window an overlay intercepts pointer clicks; the keyboard is not blocked.
+                account.focus()
+                google.keyboard.press("Enter")
                 continue
             for label in ("Continue", "Allow"):
                 button = google.get_by_role("button", name=label)
