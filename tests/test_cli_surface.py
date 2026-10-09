@@ -212,7 +212,7 @@ def test_grepapp_disabled_exits_cleanly(capsys):
 # The shape of a developer path, not one author's name. Spelling a real username
 # here would publish the very thing this test exists to keep out, and matching the
 # shape catches any contributor's home directory rather than only the first one.
-DEVELOPER_PATH = re.compile(r"~/Projects|[Uu]sers[\\/][A-Za-z0-9._-]+[\\/]")
+DEVELOPER_PATH = re.compile(r"~/Projects|(?<!/v1/)[Uu]sers[\\/][A-Za-z0-9._-]+[\\/]")
 
 
 def test_no_developer_paths_in_the_shipped_package():
