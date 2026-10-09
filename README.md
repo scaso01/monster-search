@@ -298,7 +298,7 @@ External APIs (no containers):
 | Service | Auth | Notes |
 |---------|------|-------|
 | [Marginalia](https://search.marginalia.nu/) | None | Independent web index, CC-BY-NC-SA 4.0 |
-| [Perplexity](https://www.perplexity.ai/) | Session cookie | Manual refresh ~monthly |
+| [Perplexity](https://www.perplexity.ai/) | Session cookie | Renewed daily; signs back in by email link (read from Gmail) if revoked |
 | [arXiv](https://arxiv.org/) | None | Preprint search API |
 | [Semantic Scholar](https://www.semanticscholar.org/) | None | Academic paper search |
 | [OpenAlex](https://openalex.org/) | None | Open scholarly works |
@@ -339,7 +339,8 @@ src/monster_search/
     ├── _pool.py                  # Connection pool (reusable httpx clients)
     ├── searxng.py                # SearXNG JSON API (sync + async)
     ├── marginalia.py             # Marginalia independent search
-    ├── perplexity_client.py      # Perplexity AI synthesis (cookie auth)
+    ├── perplexity_client.py      # Perplexity AI synthesis (cookie auth, daily renewal)
+    ├── perplexity_relogin.py     # Unattended email-link re-login when the session is revoked
     ├── synthesizer.py            # AI synthesis (SearXNG + Crawl4AI + llama-server)
     ├── local_researcher.py       # Local Deep Researcher LangGraph REST
     ├── crawl4ai_client.py        # Crawl4AI page extraction
@@ -377,7 +378,8 @@ Key variables:
 | `MONSTER_DEFAULT_ENGINE` | `all` | Default CLI engine |
 | `MONSTER_MAX_RESULTS` | `5` | Results per engine |
 | `MONSTER_TIMEOUT` | `15` | HTTP timeout (SearXNG) |
-| `MONSTER_PERPLEXITY_SESSION_TOKEN` | -- | Perplexity cookie (monthly refresh) |
+| `MONSTER_PERPLEXITY_SESSION_TOKEN` | -- | Perplexity cookie (fallback; browser cookie preferred) |
+| `MONSTER_GOOGLE_MINT_PYTHON` | notebooklm skill venv python | notebooklm-py install holding the Google master token used to read the sign-in email |
 | `MONSTER_PERPLEXITY_TIMEOUT` | `90` | Perplexity timeout |
 | `MONSTER_VANE_URL` | `http://localhost:3004` | Vane AI search URL |
 | `MONSTER_VANE_TIMEOUT` | `300` | Vane timeout |
