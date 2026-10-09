@@ -61,7 +61,12 @@ class Config:
 
     # Marginalia (replaced Stract — dead since July 2025)
     marginalia_url: str = field(
-        default_factory=lambda: os.environ.get("MONSTER_MARGINALIA_URL", "https://api.marginalia.nu")
+        default_factory=lambda: os.environ.get("MONSTER_MARGINALIA_URL", "https://api2.marginalia-search.com")
+    )
+    # "public" is a shared key that is usually over its per-minute limit; a free personal
+    # key comes from emailing contact@marginalia-search.com.
+    marginalia_api_key: str = field(
+        default_factory=lambda: os.environ.get("MONSTER_MARGINALIA_API_KEY", "public")
     )
     marginalia_timeout: int = field(
         # 10s was just under marginalia's typical ~11s response → consistent

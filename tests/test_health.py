@@ -125,8 +125,8 @@ def _mock_all_services(respx_mock: respx.MockRouter | None = None) -> None:
         return_value=httpx.Response(200, text=_rss_with_item())
     )
 
-    # Marginalia: /public/search/{query} endpoint (NOT root URL /)
-    respx.get("https://api.marginalia.nu/public/search/tokio").mock(
+    # Marginalia: /search?query= endpoint (NOT root URL /)
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json={"results": [{"url": "https://tokio.rs"}]})
     )
 
@@ -480,7 +480,7 @@ def test_probe_marginalia_retries_before_reporting_down():
     from monster_search.health import _probe_marginalia
 
     config = Config()
-    route = respx.get(url__startswith=f"{config.marginalia_url}/public/search/")
+    route = respx.get(url__startswith=f"{config.marginalia_url}/search")
     route.side_effect = [
         httpx.ReadTimeout("stalled"),
         httpx.Response(200, json={"results": [{"url": "https://example.com"}]}),

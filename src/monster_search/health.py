@@ -50,7 +50,6 @@ import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
-from urllib.parse import quote
 
 import httpx
 
@@ -471,8 +470,9 @@ def _probe_marginalia(config: Config) -> tuple[bool, str]:
         try:
             with _client(timeout=15) as c:
                 resp = c.get(
-                    f"{config.marginalia_url}/public/search/{quote('tokio')}",
-                    params={"count": "1"},
+                    f"{config.marginalia_url}/search",
+                    params={"query": "tokio", "count": "1"},
+                    headers={"API-Key": config.marginalia_api_key},
                 )
             if resp.status_code != 200:
                 last = f"HTTP {resp.status_code}"

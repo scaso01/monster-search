@@ -124,7 +124,7 @@ def test_cli_health_check(capsys, monkeypatch):
     respx.get("https://news.google.com/rss").mock(
         return_value=httpx.Response(200, text="<xml/>")
     )
-    respx.get("https://api.marginalia.nu/").mock(
+    respx.get("https://api2.marginalia-search.com/").mock(
         return_value=httpx.Response(200, text="OK")
     )
     respx.get("https://archive.org").mock(

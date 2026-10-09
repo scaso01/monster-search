@@ -32,7 +32,7 @@ def test_config_defaults(monkeypatch):
     assert config.perplexica_model == ""
     assert config.local_researcher_url == "http://localhost:8300"
     assert config.local_researcher_timeout == 600
-    assert config.marginalia_url == "https://api.marginalia.nu"
+    assert config.marginalia_url == "https://api2.marginalia-search.com"
     assert config.marginalia_timeout == 16
     assert config.crawl4ai_url == "http://localhost:11235"
     assert config.crawl4ai_timeout == 60

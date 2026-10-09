@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
-
 from monster_search.clients._pool import get_async_client, get_client
 from monster_search.config import Config
 from monster_search.models import SearchResult
@@ -37,11 +34,11 @@ class MarginaliaClient:
     ) -> list[SearchResult]:
         """Synchronous search via Marginalia API."""
         max_results = max_results or self._config.max_results
-        encoded = quote(query)
         client = get_client(self._config.marginalia_url, self._config.marginalia_timeout)
         resp = client.get(
-            f"{self._config.marginalia_url}/public/search/{encoded}",
-            params={"count": max_results},
+            f"{self._config.marginalia_url}/search",
+            params={"query": query, "count": max_results},
+            headers={"API-Key": self._config.marginalia_api_key},
         )
         resp.raise_for_status()
         return self._parse_results(resp.json(), max_results)
@@ -54,11 +51,11 @@ class MarginaliaClient:
     ) -> list[SearchResult]:
         """Async search via Marginalia API."""
         max_results = max_results or self._config.max_results
-        encoded = quote(query)
         client = get_async_client(self._config.marginalia_url, self._config.marginalia_timeout)
         resp = await client.get(
-            f"{self._config.marginalia_url}/public/search/{encoded}",
-            params={"count": max_results},
+            f"{self._config.marginalia_url}/search",
+            params={"query": query, "count": max_results},
+            headers={"API-Key": self._config.marginalia_api_key},
         )
         resp.raise_for_status()
         return self._parse_results(resp.json(), max_results)

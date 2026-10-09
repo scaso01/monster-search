@@ -36,7 +36,7 @@ MOCK_RESPONSE = {
 
 @respx.mock
 def test_marginalia_search():
-    respx.get("https://api.marginalia.nu/public/search/search%20engines").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json=MOCK_RESPONSE)
     )
     client = MarginaliaClient()
@@ -50,7 +50,7 @@ def test_marginalia_search():
 
 @respx.mock
 def test_marginalia_search_max_results():
-    respx.get("https://api.marginalia.nu/public/search/test").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json=MOCK_RESPONSE)
     )
     client = MarginaliaClient()
@@ -60,7 +60,7 @@ def test_marginalia_search_max_results():
 
 @respx.mock
 def test_marginalia_search_custom_config():
-    respx.get("https://example.com/api/public/search/test").mock(
+    respx.get(url__startswith="https://example.com/api/search").mock(
         return_value=httpx.Response(200, json=MOCK_RESPONSE)
     )
     config = Config(marginalia_url="https://example.com/api")
@@ -71,7 +71,7 @@ def test_marginalia_search_custom_config():
 
 @respx.mock
 def test_marginalia_search_error():
-    respx.get("https://api.marginalia.nu/public/search/test").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(500)
     )
     client = MarginaliaClient()
@@ -81,7 +81,7 @@ def test_marginalia_search_error():
 
 @respx.mock
 def test_marginalia_search_empty():
-    respx.get("https://api.marginalia.nu/public/search/test").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json={"results": []})
     )
     client = MarginaliaClient()
@@ -92,7 +92,7 @@ def test_marginalia_search_empty():
 @respx.mock
 @pytest.mark.asyncio
 async def test_marginalia_async_search():
-    respx.get("https://api.marginalia.nu/public/search/search%20engines").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json=MOCK_RESPONSE)
     )
     client = MarginaliaClient()
@@ -103,10 +103,12 @@ async def test_marginalia_async_search():
 
 @respx.mock
 def test_marginalia_sends_correct_params():
-    respx.get("https://api.marginalia.nu/public/search/test%20query").mock(
+    respx.get(url__startswith="https://api2.marginalia-search.com/search").mock(
         return_value=httpx.Response(200, json=MOCK_RESPONSE)
     )
     client = MarginaliaClient()
     client.search("test query", max_results=10)
     request = respx.calls[0].request
-    assert "count=10" in str(request.url)
+    assert request.url.params["count"] == "10"
+    assert request.url.params["query"] == "test query"
+    assert request.headers["API-Key"] == "public"

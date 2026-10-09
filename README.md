@@ -297,7 +297,7 @@ External APIs (no containers):
 
 | Service | Auth | Notes |
 |---------|------|-------|
-| [Marginalia](https://search.marginalia.nu/) | None | Independent web index, CC-BY-NC-SA 4.0 |
+| [Marginalia](https://marginalia-search.com/) | API key (`public` shared, or free personal key by email) | Independent web index, CC-BY-NC-SA 4.0 |
 | [Perplexity](https://www.perplexity.ai/) | Session cookie | Renewed daily; signs back in by email link (read from Gmail) if revoked |
 | [arXiv](https://arxiv.org/) | None | Preprint search API |
 | [Semantic Scholar](https://www.semanticscholar.org/) | None | Academic paper search |
