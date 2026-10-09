@@ -1,16 +1,21 @@
-"""Sign back in to Perplexity with Google, unattended, in a dedicated Chrome profile.
+"""Sign back in to Perplexity by email, unattended.
 
 Perplexity sometimes revokes a session server-side long before its cookie expires, and
-renewing cannot recover from that. Google sessions last for months, so a browser profile
-that stays signed in to Google can redo "Continue with Google" whenever that happens.
+renewing cannot recover from that. This requests Perplexity's sign-in email from a fresh
+browser, reads the sign-in link from Gmail, and opens it in that same browser.
 
-One-time setup (a visible window opens; sign in to Google there):
-    python -m monster_search.clients.perplexity_relogin --setup
+Gmail is read with a read-only token minted from notebooklm-py's stored Google master
+token (`notebooklm login --master-token`), so no extra credential is stored. Google sign-in
+is not used: Google rejects OAuth sign-ins from automated browsers.
+
+    python -m monster_search.clients.perplexity_relogin
 """
 
 from __future__ import annotations
 
-import argparse
+import base64
+import html
+import json
 import os
 import re
 import subprocess
@@ -18,157 +23,115 @@ import time
 import traceback
 from pathlib import Path
 
-PROFILE_DIR = Path.home() / ".cache" / "monster-search" / "perplexity-browser"
-FAILURE_SHOT = PROFILE_DIR.parent / "perplexity-relogin-failure.png"
-LOG = PROFILE_DIR.parent / "perplexity-relogin.log"
-RELOGIN_TASK = os.environ.get("MONSTER_PERPLEXITY_RELOGIN_TASK", "Perplexity Relogin")
+import httpx
+
 _SITE = "https://www.perplexity.ai"
 _SESSION_COOKIE = "__Secure-next-auth.session-token"
-# Off-screen rather than headless: Google refuses sign-in from headless browsers.
+_GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+_SIGNIN_QUERY = 'from:team@mail.perplexity.ai subject:"Sign in to Perplexity" newer_than:1d'
+# Off-screen rather than headless: Perplexity's bot check blocks headless Chrome.
 _HIDDEN = ["--window-position=-32000,-32000", "--window-size=1200,900"]
+STATE_DIR = Path.home() / ".cache" / "monster-search"
+FAILURE_SHOT = STATE_DIR / "perplexity-relogin-failure.png"
+LOG = STATE_DIR / "perplexity-relogin.log"
+# Python of a notebooklm-py install that holds a Google master token.
+MINT_PYTHON = Path(os.environ.get(
+    "MONSTER_GOOGLE_MINT_PYTHON",
+    Path.home() / ".claude" / "skills" / "notebooklm" / ".venv" / "Scripts" / "python.exe"))
+
+# Gmail's own Android client id; the token is read-only (gmail.readonly).
+_TOKEN_SCRIPT = """
+import gpsoauth, json
+from notebooklm.paths import get_master_token_path
+from notebooklm.auth import read_master_token
+rec = read_master_token(get_master_token_path())
+if rec is None:
+    raise SystemExit("no notebooklm master token")
+r = gpsoauth.perform_oauth(rec["email"], rec["master_token"], rec["android_id"],
+    service="oauth2:https://www.googleapis.com/auth/gmail.readonly", app="com.google.android.gm",
+    client_sig="38918a453d07199354f8b19af05ec6562ced5788")
+if "Auth" not in r:
+    raise SystemExit(f"Google refused a Gmail token: {r.get('Error', 'unknown error')}")
+print(json.dumps({"email": rec["email"], "token": r["Auth"]}))
+"""
 
 
-class GoogleSignInNeeded(RuntimeError):
-    """The dedicated browser is no longer signed in to Google; run --setup once."""
+def _gmail_access() -> tuple[str, str]:
+    """(email, read-only Gmail bearer token) minted from the stored master token."""
+    if not MINT_PYTHON.exists():
+        raise RuntimeError(f"no notebooklm-py install at {MINT_PYTHON} (set MONSTER_GOOGLE_MINT_PYTHON)")
+    done = subprocess.run([str(MINT_PYTHON), "-I", "-c", _TOKEN_SCRIPT],
+                          capture_output=True, text=True, timeout=120)
+    if done.returncode != 0:
+        raise RuntimeError(f"could not get Gmail access from the master token: {done.stderr.strip()[-300:]}")
+    data = json.loads(done.stdout)
+    return data["email"], data["token"]
 
 
-def _launch(p, hidden: bool):
-    return p.chromium.launch_persistent_context(
-        str(PROFILE_DIR), channel="chrome", headless=False, no_viewport=True,
-        args=_HIDDEN if hidden else [],
-    )
+def _message_body(payload: dict) -> str:
+    parts = [payload] + payload.get("parts", [])
+    return "".join(base64.urlsafe_b64decode(p["body"]["data"] + "==").decode("utf-8", "replace")
+                   for p in parts if p.get("body", {}).get("data"))
 
 
-def _session(ctx) -> tuple[str, float] | None:
-    for c in ctx.cookies(_SITE):
-        if c["name"] == _SESSION_COOKIE and c["value"] and c.get("expires", 0) > time.time():
-            return c["value"], float(c["expires"])
+def _signin_link(token: str, sent_after: float) -> str | None:
+    """The sign-in link from the newest Perplexity sign-in email sent after *sent_after*."""
+    headers = {"Authorization": f"Bearer {token}"}
+    listing = httpx.get(_GMAIL, params={"q": _SIGNIN_QUERY, "maxResults": 3}, headers=headers, timeout=30)
+    listing.raise_for_status()
+    for item in listing.json().get("messages", []):
+        msg = httpx.get(f"{_GMAIL}/{item['id']}", params={"format": "full"}, headers=headers, timeout=30)
+        msg.raise_for_status()
+        data = msg.json()
+        if int(data["internalDate"]) / 1000 < sent_after:
+            continue
+        for url in re.findall(r'href="([^"]+)"', _message_body(data["payload"])):
+            if "/api/auth/callback/email" in url:
+                return html.unescape(url)
     return None
 
 
-def _google_signed_in(ctx) -> bool:
-    return any(c["name"] == "SID" for c in ctx.cookies("https://accounts.google.com"))
-
-
-def _sign_in_to_perplexity(ctx, timeout_s: int) -> tuple[str, float]:
-    """Run Continue-with-Google and return the fresh Perplexity session cookie."""
-    stale = _session(ctx)
-    # Perplexity keeps more than one session cookie; any survivor hides the sign-in button.
-    ctx.clear_cookies(domain=re.compile(r"perplexity\.ai$"))
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto(_SITE + "/auth/signin", wait_until="domcontentloaded")
-    try:
-        page.get_by_role("button", name="Continue with Google").click(timeout=30000)
-    except Exception as exc:
-        page.screenshot(path=str(FAILURE_SHOT))
-        raise RuntimeError(f"no 'Continue with Google' button at {page.url} (title {page.title()!r}); "
-                           f"screenshot {FAILURE_SHOT}") from exc
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        page.wait_for_timeout(1500)
-        fresh = _session(ctx)
-        if fresh and (not stale or fresh[0] != stale[0]):
-            return fresh
-        # Google may answer in the same tab or in a pop-up.
-        for google in [pg for pg in ctx.pages if "accounts.google.com" in pg.url]:
-            if google.locator('input[type="password"]:visible, input[type="email"]:visible').count():
-                raise GoogleSignInNeeded(
-                    "the Perplexity re-login browser is signed out of Google; run "
-                    "`python -m monster_search.clients.perplexity_relogin --setup` once")
-            account = google.locator("[data-identifier]").first
-            if account.count():
-                # In the off-screen window an overlay intercepts pointer clicks; the keyboard is not blocked.
-                account.focus()
-                google.keyboard.press("Enter")
-                continue
-            for label in ("Continue", "Allow"):
-                button = google.get_by_role("button", name=label)
-                if button.count():
-                    button.first.click()
-                    break
-    urls = [pg.url for pg in ctx.pages]
-    raise TimeoutError(f"Perplexity Google sign-in did not finish within {timeout_s}s (pages {urls})")
-
-
-def relogin(timeout_s: int = 120) -> tuple[str, float]:
+def relogin(timeout_s: int = 150) -> tuple[str, float]:
     """Sign in to Perplexity again without a human; returns (token, expiry epoch)."""
     from patchright.sync_api import sync_playwright
 
-    if not PROFILE_DIR.exists():
-        raise GoogleSignInNeeded(
-            "no Perplexity re-login browser yet; run "
-            "`python -m monster_search.clients.perplexity_relogin --setup` once")
+    email, gmail_token = _gmail_access()
     with sync_playwright() as p:
-        ctx = _launch(p, hidden=True)
+        browser = p.chromium.launch(channel="chrome", headless=False, args=_HIDDEN)
         try:
-            if not _google_signed_in(ctx):
-                raise GoogleSignInNeeded(
-                    "the Perplexity re-login browser is signed out of Google; run "
-                    "`python -m monster_search.clients.perplexity_relogin --setup` once")
-            return _sign_in_to_perplexity(ctx, timeout_s)
+            page = browser.new_context().new_page()
+            page.goto(_SITE + "/auth/signin", wait_until="domcontentloaded")
+            try:
+                page.locator('input[type="email"]').first.fill(email, timeout=30000)
+                sent_after = time.time() - 5
+                page.get_by_role("button", name="Continue with email").click(timeout=30000)
+            except Exception as exc:
+                page.screenshot(path=str(FAILURE_SHOT))
+                raise RuntimeError(f"Perplexity sign-in page changed at {page.url}; screenshot {FAILURE_SHOT}") from exc
+            deadline = time.time() + timeout_s
+            link = None
+            while link is None and time.time() < deadline:
+                time.sleep(3)
+                link = _signin_link(gmail_token, sent_after)
+            if link is None:
+                raise TimeoutError(f"no Perplexity sign-in email arrived within {timeout_s}s")
+            page.goto(link, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            for c in page.context.cookies(_SITE):
+                if c.get("name") == _SESSION_COOKIE and c.get("value"):
+                    return c["value"], float(c.get("expires", 0))
+            page.screenshot(path=str(FAILURE_SHOT))
+            raise RuntimeError(f"the sign-in link gave no session (ended at {page.url}); screenshot {FAILURE_SHOT}")
         finally:
-            ctx.close()
-
-
-def setup(timeout_s: int = 900) -> tuple[str, float]:
-    """Open a visible window, wait for a Google sign-in, then sign in to Perplexity with it."""
-    from patchright.sync_api import sync_playwright
-
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as p:
-        ctx = _launch(p, hidden=False)
-        try:
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            if not _google_signed_in(ctx):
-                page.goto("https://accounts.google.com/", wait_until="domcontentloaded")
-                print("Sign in to Google in the window that just opened (the account you use for Perplexity).")
-                deadline = time.time() + timeout_s
-                while not _google_signed_in(ctx):
-                    if time.time() > deadline:
-                        raise TimeoutError("no Google sign-in within the time allowed")
-                    page.wait_for_timeout(2000)
-            return _sign_in_to_perplexity(ctx, timeout_s=180)
-        finally:
-            ctx.close()
-
-
-def relogin_anywhere(timeout_s: int = 300) -> tuple[str, float]:
-    """Sign in again, from a background task too.
-
-    Chrome's cookie store is locked to the signed-in Windows desktop, so a task that runs
-    without one (S4U) cannot use the Google login. On Windows this hands the job to the
-    RELOGIN_TASK scheduled task, which runs on the desktop, and waits for its result.
-    """
-    from monster_search.clients.perplexity_client import SESSION_CACHE, _read_cache
-
-    if os.name != "nt":
-        return relogin()
-    before = SESSION_CACHE.stat().st_mtime if SESSION_CACHE.exists() else 0.0
-    # Never open the profile from here: a desktop-less Chrome cannot unlock its key and
-    # replaces it, which silently deletes the saved Google login.
-    started = subprocess.run(["schtasks", "/Run", "/TN", RELOGIN_TASK], capture_output=True, text=True)
-    if started.returncode != 0:
-        raise RuntimeError(f"cannot start the {RELOGIN_TASK!r} task: {started.stderr.strip() or started.stdout.strip()}")
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        time.sleep(3)
-        if SESSION_CACHE.exists() and SESSION_CACHE.stat().st_mtime > before:
-            cached = _read_cache()
-            if cached:
-                return cached
-    raise TimeoutError(f"the {RELOGIN_TASK!r} task did not sign in within {timeout_s}s; see {LOG}")
+            browser.close()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sign back in to Perplexity with Google.")
-    parser.add_argument("--setup", action="store_true", help="one-time visible Google sign-in")
-    args = parser.parse_args()
     from monster_search.clients.perplexity_client import PerplexityClient, save_session
 
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        token, expires = setup() if args.setup else relogin()
-        save_session(token, expires)
+        save_session(*relogin())
         renewed = PerplexityClient()._renew_once()
     except Exception:
         with LOG.open("a", encoding="utf-8") as log:

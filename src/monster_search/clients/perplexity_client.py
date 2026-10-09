@@ -118,15 +118,15 @@ class PerplexityClient:
     def renew(self) -> float:
         """Refresh the session for another 30 days; returns the new expiry epoch.
 
-        When Perplexity no longer recognises the login, signs in again with Google in the
-        dedicated re-login browser, then renews that fresh session.
+        When Perplexity no longer recognises the login, signs in again by email
+        (perplexity_relogin), then renews that fresh session.
         """
         try:
             return self._renew_once()
         except PerplexityLoginLapsed:
-            from monster_search.clients.perplexity_relogin import relogin_anywhere
+            from monster_search.clients.perplexity_relogin import relogin
 
-            save_session(*relogin_anywhere())
+            save_session(*relogin())
             return self._renew_once()
 
     def _renew_once(self) -> float:

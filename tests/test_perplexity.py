@@ -312,7 +312,7 @@ def test_renew_saves_the_new_session(monkeypatch):
 
 def _relogin_module(relogin):
     module = MagicMock()
-    module.relogin_anywhere = relogin
+    module.relogin = relogin
     return module
 
 
@@ -348,3 +348,25 @@ def test_renew_fails_loudly_when_relogin_fails(monkeypatch):
                                   "monster_search.clients.perplexity_relogin": _relogin_module(relogin)}):
         with pytest.raises(RuntimeError, match="--setup"):
             client.renew()
+
+
+def test_signin_link_is_read_from_the_newest_email(monkeypatch):
+    import base64
+    import time
+    from monster_search.clients import perplexity_relogin as rl
+
+    body = '<a href="https://www.perplexity.ai/api/auth/callback/email?token=t&amp;email=e">Sign in</a>'
+    full = {"internalDate": str(int(time.time() * 1000)),
+            "payload": {"body": {"data": base64.urlsafe_b64encode(body.encode()).decode()}}}
+    old = {"internalDate": "1000", "payload": {"body": {}}}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        resp = MagicMock()
+        resp.json.return_value = ({"messages": [{"id": "new"}, {"id": "old"}]} if url == rl._GMAIL
+                                  else full if url.endswith("/new") else old)
+        return resp
+
+    monkeypatch.setattr(rl.httpx, "get", fake_get)
+    assert rl._signin_link("tok", time.time() - 60) == \
+        "https://www.perplexity.ai/api/auth/callback/email?token=t&email=e"
+    assert rl._signin_link("tok", time.time() + 60) is None
