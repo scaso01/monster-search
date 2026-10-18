@@ -121,7 +121,7 @@ The default search mode (`monster-search "query"`) uses smart tiering:
 ```
 Tier 1 (fast, ~15-60s):  searxng, marginalia, news, gnews, perplexity,
                           synthesizer, + router-gated specialists
-Tier 2 (medium, ~2 min): vane, khoj, fyin
+Tier 2 (medium, ~2 min): ddg, vane, khoj, fyin
 Tier 3 (slow, ~3-8 min): local_researcher
 ```
 
