@@ -26,7 +26,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install ".[dev]"
+          pip install -c requirements-ci.txt ".[dev]"
 
       # Integration tests need live self-hosted containers, so they stay out.
       - name: Test
@@ -37,3 +37,11 @@ jobs:
       # computed and then never asserted on.
       - name: Lint
         run: pyflakes src/monster_search/ tests/
+
+  # The one check branch protection requires, so matrix changes never strand a merge.
+  ci-ok:
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
