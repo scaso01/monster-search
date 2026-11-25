@@ -1,9 +1,13 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  # uv re-solves uv.lock as a whole, so one update cannot clash with another package's needs.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: monthly
+    allow:
+      # The default covers only pyproject.toml's packages; this also updates the rest of uv.lock.
+      - dependency-type: all
     groups:
       all-dependencies:
         patterns: ["*"]
