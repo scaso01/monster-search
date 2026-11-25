@@ -23,10 +23,14 @@ jobs:
 
       # A plain install, not an editable one, so a missing runtime dependency
       # shows up here rather than in someone's fresh clone.
+      # uv.lock holds the exact versions CI tests, solved as one set so updates never conflict.
+      # --locked fails the run if pyproject.toml changed without re-running `uv lock`.
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -c requirements-ci.txt ".[dev]"
+          pip install uv==0.12.22
+          uv export --locked --no-hashes --no-emit-project --all-extras -o "$RUNNER_TEMP/constraints.txt"
+          pip install -c "$RUNNER_TEMP/constraints.txt" ".[dev]"
 
       # Integration tests need live self-hosted containers, so they stay out.
       - name: Test

@@ -1,6 +1,6 @@
 name: Newest libraries
 
-# CI pins versions (requirements-ci.txt). This weekly run installs the newest allowed
+# CI pins versions (uv.lock). This weekly run installs the newest allowed
 # versions instead, so a release that breaks a fresh install shows up within a week.
 on:
   schedule:
